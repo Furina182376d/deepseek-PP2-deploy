@@ -100,6 +100,7 @@ def run_tp(tp: int):
         trust_remote_code=True,
         kv_cache_dtype=KV_CACHE_DTYPE,
         enforce_eager=False,
+        disable_log_stats=False,  # required for per-request timing metrics (TTFT, TPOT, etc.)
     )
     print("Model loaded.\n")
 
@@ -134,15 +135,26 @@ def run_tp(tp: int):
         total_ms = (t1 - t0) * 1000
 
         m = out.metrics
-        # TTFT
-        ttft_ms = m.first_token_time * 1000 if m and m.first_token_time else 0
-        # Decode tokens/sec from vLLM's time_per_output_token
-        tpot_ms = (m.time_per_output_token * 1000) if m and m.time_per_output_token else 0
-        decode_tps = (1.0 / m.time_per_output_token) if m and m.time_per_output_token and m.time_per_output_token > 0 else 0
-        # Prefill = TTFT minus one decode step
-        first_decode_ms = tpot_ms
-        prefill_ms = max(0, ttft_ms - first_decode_ms)
-        prefill_tps = prompt_tok / (prefill_ms / 1000) if prefill_ms > 0 else 0
+        # vLLM v1 uses RequestStateStats — compute TTFT/TPOT from timestamps
+        if m and m.first_token_latency is not None:
+            ttft_ms = m.first_token_latency * 1000
+            # TPOT = decode time / (generated_tokens - 1)  (first_token is already counted in TTFT)
+            if m.num_generation_tokens > 1 and m.last_token_ts and m.first_token_ts:
+                tpot_sec = (m.last_token_ts - m.first_token_ts) / (m.num_generation_tokens - 1)
+                tpot_ms = tpot_sec * 1000
+                decode_tps = 1.0 / tpot_sec
+            else:
+                tpot_ms = 0.0
+                decode_tps = 0.0
+            first_decode_ms = tpot_ms
+            prefill_ms = max(0.0, ttft_ms - first_decode_ms)
+            prefill_tps = prompt_tok / (prefill_ms / 1000) if prefill_ms > 0 else 0.0
+        else:
+            ttft_ms = 0.0
+            tpot_ms = 0.0
+            decode_tps = 0.0
+            prefill_ms = 0.0
+            prefill_tps = 0.0
 
         used, _ = _gpu_mem(tp)
         avg_mem = sum(used) / len(used)
