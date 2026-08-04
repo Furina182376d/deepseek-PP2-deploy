@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Profile DeepSeek V4 Flash inference with vLLM — PP=2 TP=4 across two nodes.
+Profile DeepSeek V4 Flash inference with vLLM — PP=2 TP=8 across two nodes.
 
 Launched via torchrun on each node (see ``launch_pp.sh``).  Every process runs
 the same script; only global rank 0 collects and logs results.
 
 Usage (indirect — via launch_pp.sh)::
 
-    torchrun --nnodes=2 --nproc_per_node=4 --node_rank=0 \\
+    torchrun --nnodes=2 --nproc_per_node=8 --node_rank=0 \\
         --master_addr=192.168.0.63 --master_port=29500 \\
         profile_dsv4_pp.py
 
@@ -22,21 +22,26 @@ import json
 import os
 import sys
 
+# ---- project-root path (for cross-phase imports) ----
+_PROJ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJ not in sys.path:
+    sys.path.insert(0, _PROJ)
+
 # Install encrypted PP P2P hooks BEFORE vLLM imports.
 # No-op if VLLM_COMM_PSK is not set in the environment.
-from comm_crypto import install_encrypted_pp_hooks
+from phase3.comm_crypto import install_encrypted_pp_hooks
 
 install_encrypted_pp_hooks()
 
-from results_utils import (
+from phase0.results_utils import (
     ALL_RESULTS,
     RESULTS_DIR,
     TIMESTAMP,
     write_report_and_summary,
 )
-from run_pp import run_pp
+from phase1.run_pp import run_pp
 
-import config_pp as cfg
+import phase1.config_pp as cfg
 
 if __name__ == "__main__":
     print(

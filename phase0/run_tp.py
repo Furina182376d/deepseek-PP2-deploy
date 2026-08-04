@@ -4,16 +4,23 @@ across a range of context lengths.
 """
 
 import gc
+import os
+import sys
 import time
 
 import torch
 from vllm import LLM, SamplingParams
 
-import config
-from gpu_utils import gpu_mem
-from prompt_utils import make_prompt
-from results_utils import close_csv, ensure_results_dir, open_csv, write_csv_row
-from results_utils import ALL_RESULTS  # noqa: F401 — accumulated for final JSON dump
+# ---- project-root path (for cross-phase imports) ----
+_PROJ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJ not in sys.path:
+    sys.path.insert(0, _PROJ)
+
+import phase0.config as config
+from phase0.gpu_utils import gpu_mem
+from phase0.prompt_utils import make_prompt
+from phase0.results_utils import close_csv, ensure_results_dir, open_csv, write_csv_row
+from phase0.results_utils import ALL_RESULTS  # noqa: F401 — accumulated for final JSON dump
 
 
 def run_tp(tp: int):

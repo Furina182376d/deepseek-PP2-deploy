@@ -15,10 +15,16 @@ Public API:
 import json
 import os
 import random
+import sys
 from pathlib import Path
 from typing import Iterator
 
-from benchmark_config import (
+# ---- project-root path (for cross-phase imports) ----
+_PROJ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJ not in sys.path:
+    sys.path.insert(0, _PROJ)
+
+from phase2.benchmark_config import (
     FILLER_PARAGRAPHS,
     LONGBENCH_DATA_DIRS,
     MAX_SAMPLES_PER_DATASET,

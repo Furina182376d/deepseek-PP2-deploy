@@ -13,10 +13,16 @@ This is the main entry point.  The heavy-lifting functions live in:
 
 import json
 import os
+import sys
 
-import config
-from results_utils import ALL_RESULTS, RESULTS_DIR, TIMESTAMP, write_report_and_summary
-from run_tp import run_tp
+# ---- project-root path (for cross-phase imports) ----
+_PROJ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJ not in sys.path:
+    sys.path.insert(0, _PROJ)
+
+import phase0.config as config
+from phase0.results_utils import ALL_RESULTS, RESULTS_DIR, TIMESTAMP, write_report_and_summary
+from phase0.run_tp import run_tp
 
 if __name__ == "__main__":
     for tp in [4, 8]:

@@ -9,15 +9,22 @@ activations.  All processes call ``llm.generate()`` redundantly — only the
 """
 
 import gc
+import os
+import sys
 import time
 
 import torch
 from vllm import LLM, SamplingParams
 
-import config_pp as cfg
-from gpu_utils import gpu_mem
-from prompt_utils import make_prompt
-from results_utils import (
+# ---- project-root path (for cross-phase imports) ----
+_PROJ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJ not in sys.path:
+    sys.path.insert(0, _PROJ)
+
+import phase1.config_pp as cfg
+from phase0.gpu_utils import gpu_mem
+from phase0.prompt_utils import make_prompt
+from phase0.results_utils import (
     ALL_RESULTS,
     close_csv,
     ensure_results_dir,

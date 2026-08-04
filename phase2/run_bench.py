@@ -9,16 +9,23 @@ Can be used with either the TP-only or PP multi-node backend by importing
 the appropriate run function.
 """
 
+import os
+import sys
 import time
 from typing import Callable
 
 import torch
 from vllm import LLM, SamplingParams
 
-from benchmark_config import NEEDLE_CONTEXT_LENGTHS, NEEDLE_DEPTHS, OUTPUT_LENS
-from data_loader import iter_needle_prompts, list_available_datasets, load_longbench
-from prompt_utils import make_prompt
-from results_utils import (
+# ---- project-root path (for cross-phase imports) ----
+_PROJ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJ not in sys.path:
+    sys.path.insert(0, _PROJ)
+
+from phase2.benchmark_config import NEEDLE_CONTEXT_LENGTHS, NEEDLE_DEPTHS, OUTPUT_LENS
+from phase2.data_loader import iter_needle_prompts, list_available_datasets, load_longbench
+from phase0.prompt_utils import make_prompt
+from phase0.results_utils import (
     ALL_RESULTS,
     close_csv,
     ensure_results_dir,

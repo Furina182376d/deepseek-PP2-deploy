@@ -5,9 +5,15 @@ Results logging — CSV, JSON, and human-readable report.
 import csv
 import json
 import os
+import sys
 from datetime import datetime
 
-from config import KV_CACHE_DTYPE, GPU_MEM_UTIL, MAX_MODEL_LEN, MODEL_PATH, OUTPUT_LEN
+# ---- project-root path (for cross-phase imports) ----
+_PROJ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJ not in sys.path:
+    sys.path.insert(0, _PROJ)
+
+from phase0.config import KV_CACHE_DTYPE, GPU_MEM_UTIL, MAX_MODEL_LEN, MODEL_PATH, OUTPUT_LEN
 
 # --- Module-level state ---
 TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
