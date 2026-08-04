@@ -70,7 +70,7 @@ def close_csv():
         _csv_writer = None
 
 
-def write_report_and_summary():
+def write_report_and_summary(title: str = "TP=4 vs TP=8 对比"):
     """Print a terminal summary AND write a human-readable report.txt."""
     if not ALL_RESULTS:
         return
@@ -86,7 +86,7 @@ def write_report_and_summary():
     # ----- Build terminal summary -----
     sep = "=" * 100
     print(f"\n\n{sep}")
-    print("SUMMARY — TP=4 vs TP=8 对比")
+    print(f"SUMMARY — {title}")
     print(sep)
 
     print(f"\n{'ctx':>6s} | " + " | ".join(f"{'—— TP={t} ——':>41s}" for t in tps))
@@ -132,7 +132,7 @@ def write_report_and_summary():
 
     lines.append("")
     lines.append("=" * 110)
-    lines.append("TP=4 vs TP=8 COMPARISON")
+    lines.append(title.upper())
     lines.append("=" * 110)
     header = f"{'ctx':>6s} | " + " | ".join(f"{'—— TP={t} ——':>50s}" for t in tps)
     sub_hdr = f"{'':>6s} | " + " | ".join(f"{'ttft_ms':>8s} {'prefill_t/s':>10s} {'decode_t/s':>10s} {'TPOT_ms':>8s} {'avg_mem_mb':>10s}" for _ in tps)
@@ -153,13 +153,14 @@ def write_report_and_summary():
     lines.append("")
     lines.append("=" * 110)
     lines.append("FILES IN THIS RUN")
-    lines.append(f"  tp4.csv          — TP=4 详细结果")
-    lines.append(f"  tp8.csv          — TP=8 详细结果")
+    for tp_val in tps:
+        lines.append(f"  tp{tp_val}.csv      — {tp_val} 详细结果")
     lines.append(f"  full_results.json — 全部结果 (含元数据)")
     lines.append(f"  report.txt       — 本文件")
 
     with open(report_path, "w") as f:
         f.write("\n".join(lines) + "\n")
 
+    csv_files = "  ".join(f"tp{tp}.csv" for tp in tps)
     print(f"\nResults saved to: {RESULTS_DIR}/")
-    print(f"  tp4.csv  tp8.csv  full_results.json  report.txt")
+    print(f"  {csv_files}  full_results.json  report.txt")

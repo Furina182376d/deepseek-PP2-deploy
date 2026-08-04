@@ -14,6 +14,7 @@ import sys
 import time
 
 import torch
+import torch.distributed as dist
 from vllm import LLM, SamplingParams
 
 # ---- project-root path (for cross-phase imports) ----
@@ -85,7 +86,7 @@ def _timed_generate(llm: LLM, prompt: str, sp: SamplingParams, ctx_len: int):
 def run_pp():
     """Main PP profiling entry point — called by every torchrun process."""
 
-    tp_per_pp = cfg.TP_SIZE_PER_PP  # 4
+    tp_per_pp = cfg.TP_SIZE_PER_PP  # 8
 
     if cfg.IS_LEADER:
         print(
@@ -116,6 +117,12 @@ def run_pp():
         master_addr=cfg.MASTER_ADDR,
         master_port=cfg.MASTER_PORT,
     )
+
+    # ---- All ranks: synchronize after model load ----
+    if dist.is_initialized():
+        dist.barrier()
+        if cfg.IS_LEADER:
+            print("All ranks synchronized after model load (barrier passed).")
 
     if cfg.IS_LEADER:
         print("Model loaded.\n")

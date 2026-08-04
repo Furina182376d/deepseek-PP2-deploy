@@ -11,7 +11,7 @@
 #   - The ``ds`` conda environment available on both nodes.
 #   - Identical codebase path on both nodes.
 # ---------------------------------------------------------------------------
-set -euo pipefail
+set -eo pipefail
 
 NODE_RANK="${1:?Usage: $0 <node_rank (0 or 1)>}"
 MASTER_ADDR="192.168.0.63"
@@ -38,6 +38,13 @@ export GLOO_SOCKET_IFNAME=eth0
 export NCCL_DEBUG=INFO
 export NCCL_DEBUG_SUBSYS=INIT,NET
 export NCCL_CUMEM_HOST_ENABLE=0          # cuMem unavailable, fallback to /dev/shm
+export NCCL_TIMEOUT=1800                 # 30 min timeout — avoid hanging forever
+export NCCL_ASYNC_ERROR_HANDLING=1       # async error handling to detect dead peers
+export TORCH_DISTRIBUTED_TIMEOUT=1800    # PyTorch distributed timeout
+
+# Force HuggingFace libraries to use local files only (skip Hub repo-id validation)
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
 
 # Required by external_launcher executor (deterministic scheduling)
 export VLLM_ENABLE_V1_MULTIPROCESSING=0
@@ -53,6 +60,20 @@ echo "Master     : ${MASTER_ADDR}:${MASTER_PORT}"
 echo "Procs/node : ${NPROC_PER_NODE}"
 echo "Total procs: $((NNODES * NPROC_PER_NODE))"
 echo "============================================"
+
+# ---- Pre-flight: verify cross-node connectivity ----
+if [ "${NODE_RANK}" = "0" ]; then
+    PEER_IP="192.168.0.65"
+else
+    PEER_IP="192.168.0.63"
+fi
+echo "Checking connectivity to peer node (${PEER_IP})..."
+if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "${PEER_IP}" "echo 'Peer reachable'" 2>/dev/null; then
+    echo "Peer node ${PEER_IP} is reachable."
+else
+    echo "WARNING: Cannot reach peer node ${PEER_IP} via SSH."
+    echo "         Make sure the other node has started launch_pp.sh."
+fi
 
 torchrun \
     --nnodes="${NNODES}" \

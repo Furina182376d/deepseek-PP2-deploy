@@ -21,6 +21,7 @@ The heavy-lifting functions live in:
 import json
 import os
 import sys
+import time
 
 # ---- project-root path (for cross-phase imports) ----
 _PROJ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -51,10 +52,23 @@ if __name__ == "__main__":
         f"backend={cfg.DISTRIBUTED_EXECUTOR_BACKEND}]"
     )
 
+    # ---- Validate config consistency (only leader reports) ----
+    cfg.validate_config()
+    if cfg.IS_LEADER:
+        print("Config validation passed.")
+
     try:
         run_pp()
     except Exception as e:
         print(f"\n[rank {cfg.GLOBAL_RANK}] PP run failed: {e}", file=sys.stderr)
+
+        # ---- Force cleanup before retry ----
+        import gc
+        import torch
+        gc.collect()
+        torch.cuda.empty_cache()
+        time.sleep(5)  # wait for NCCL connections to fully release
+
         # Retry with smaller max_model_len
         try:
             if cfg.IS_LEADER:
@@ -85,4 +99,4 @@ if __name__ == "__main__":
         with open(json_path, "w") as f:
             json.dump({"metadata": metadata, "results": ALL_RESULTS}, f, indent=2)
 
-        write_report_and_summary()
+        write_report_and_summary(title="PP=2 TP=8 两节点部署")

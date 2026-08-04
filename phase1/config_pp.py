@@ -36,3 +36,27 @@ LOCAL_WORLD_SIZE = int(os.environ.get("LOCAL_WORLD_SIZE", TP_SIZE_PER_PP))
 WORLD_SIZE = int(os.environ.get("WORLD_SIZE", WORLD_SIZE_PP))
 NODE_RANK = GLOBAL_RANK // LOCAL_WORLD_SIZE
 IS_LEADER = GLOBAL_RANK == 0
+
+
+def validate_config():
+    """Verify that environment-supplied values are consistent with config."""
+    errors = []
+    if LOCAL_WORLD_SIZE != TP_SIZE_PER_PP:
+        errors.append(
+            f"LOCAL_WORLD_SIZE={LOCAL_WORLD_SIZE} != TP_SIZE_PER_PP={TP_SIZE_PER_PP}"
+        )
+    if WORLD_SIZE != PP_SIZE * TP_SIZE_PER_PP:
+        errors.append(
+            f"WORLD_SIZE={WORLD_SIZE} != PP_SIZE*TP_SIZE_PER_PP="
+            f"{PP_SIZE * TP_SIZE_PER_PP}"
+        )
+    if WORLD_SIZE != NNODES * LOCAL_WORLD_SIZE:
+        errors.append(
+            f"WORLD_SIZE={WORLD_SIZE} != NNODES*LOCAL_WORLD_SIZE="
+            f"{NNODES * LOCAL_WORLD_SIZE}"
+        )
+    if errors:
+        raise RuntimeError(
+            "Config validation failed:\n  " + "\n  ".join(errors)
+        )
+    return True
