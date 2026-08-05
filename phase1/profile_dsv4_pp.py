@@ -23,6 +23,12 @@ import os
 import sys
 import time
 
+# ---- Force local file resolution for HuggingFace libraries ----
+# Must be set BEFORE any vLLM/transformers import, otherwise the Hub
+# validator rejects local paths like /data/model/... on newer versions.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 # ---- project-root path (for cross-phase imports) ----
 _PROJ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJ not in sys.path:

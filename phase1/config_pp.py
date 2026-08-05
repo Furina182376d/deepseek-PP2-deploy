@@ -21,8 +21,8 @@ from phase0.config import (  # noqa: F401 — re-export for convenience
 
 # ---- PP / TP / multi-node ----
 PP_SIZE = 2
-TP_SIZE_PER_PP = 8         # each PP stage uses all 8 GPUs on the node
-WORLD_SIZE_PP = PP_SIZE * TP_SIZE_PER_PP  # 16 — total workers across both nodes
+TP_SIZE_PER_PP = 4         # each PP stage uses 4 GPUs on the node
+WORLD_SIZE_PP = PP_SIZE * TP_SIZE_PER_PP  # 8 — total workers across both nodes
 
 NNODES = 2
 MASTER_ADDR = "192.168.0.63"

@@ -17,7 +17,7 @@ NODE_RANK="${1:?Usage: $0 <node_rank (0 or 1)>}"
 MASTER_ADDR="192.168.0.63"
 MASTER_PORT=29500
 NNODES=2
-NPROC_PER_NODE=8   # one process per GPU — all 8 H20s used per node
+NPROC_PER_NODE=4   # one process per GPU — 4 H20s used per node
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONDA_BASE="${HOME}/miniconda3"
