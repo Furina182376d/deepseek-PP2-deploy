@@ -99,6 +99,27 @@ def run_pp():
             f"{'='*60}"
         )
 
+    # ---- Pre-flight: verify model path exists (all ranks) ----
+    import os as _os
+    _model_path = cfg.MODEL_PATH
+    if not _os.path.exists(_model_path):
+        raise FileNotFoundError(
+            f"Model path does not exist on this node: {_model_path}\n"
+            f"  Node rank: {cfg.NODE_RANK}  Global rank: {cfg.GLOBAL_RANK}\n"
+            f"  Host: {_os.uname().nodename}\n"
+            f"  Ensure the model directory exists and is accessible on ALL nodes."
+        )
+    _config_json = _os.path.join(_model_path, "config.json")
+    if not _os.path.exists(_config_json):
+        raise FileNotFoundError(
+            f"config.json not found in model directory on this node: {_config_json}\n"
+            f"  Node rank: {cfg.NODE_RANK}  Global rank: {cfg.GLOBAL_RANK}\n"
+            f"  Host: {_os.uname().nodename}\n"
+            f"  The model directory exists but may be incomplete."
+        )
+    if cfg.IS_LEADER:
+        print(f"Model path verified: {_model_path}")
+
     # ---- All ranks: create LLM instance ----
     llm = LLM(
         model=cfg.MODEL_PATH,
