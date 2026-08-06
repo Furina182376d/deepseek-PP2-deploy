@@ -69,6 +69,9 @@ if __name__ == "__main__":
         print(f"\n[rank {cfg.GLOBAL_RANK}] PP run failed: {e}", file=sys.stderr)
 
         # ---- Force cleanup before retry ----
+        # run_pp()'s finally block already ran del llm + gc + empty_cache,
+        # but we do an extra round here to be safe.  Keep the process group
+        # alive — retry needs it (external_launcher uses torchrun's group).
         import gc
         import torch
         gc.collect()
