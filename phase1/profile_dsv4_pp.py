@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Profile GLM5.2 inference with vLLM — PP=2 TP=4 across two nodes.
+Profile GLM5.2 inference with vLLM — PP=2 TP=8 across two nodes.
 
 Launched via torchrun on each node (see ``launch_pp.sh``).  Every process runs
 the same script; only global rank 0 collects and logs results.
@@ -105,4 +105,4 @@ if __name__ == "__main__":
         with open(json_path, "w") as f:
             json.dump({"metadata": metadata, "results": ALL_RESULTS}, f, indent=2)
 
-        write_report_and_summary(title="PP=2 TP=4 GLM5.2 两节点部署")
+        write_report_and_summary(title="PP=2 TP=8 GLM5.2 两节点部署")
