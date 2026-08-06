@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Profile DeepSeek V4 Flash inference with vLLM — PP=2 TP=8 across two nodes.
+Profile GLM5.2 inference with vLLM — PP=2 TP=4 across two nodes.
 
 Launched via torchrun on each node (see ``launch_pp.sh``).  Every process runs
 the same script; only global rank 0 collects and logs results.
 
 Usage (indirect — via launch_pp.sh)::
 
-    torchrun --nnodes=2 --nproc_per_node=8 --node_rank=0 \\
+    torchrun --nnodes=2 --nproc_per_node=4 --node_rank=0 \\
         --master_addr=192.168.0.63 --master_port=29500 \\
         profile_dsv4_pp.py
 
@@ -105,4 +105,4 @@ if __name__ == "__main__":
         with open(json_path, "w") as f:
             json.dump({"metadata": metadata, "results": ALL_RESULTS}, f, indent=2)
 
-        write_report_and_summary(title="PP=2 TP=8 两节点部署")
+        write_report_and_summary(title="PP=2 TP=4 GLM5.2 两节点部署")

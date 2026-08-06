@@ -86,7 +86,7 @@ def _timed_generate(llm: LLM, prompt: str, sp: SamplingParams, ctx_len: int):
 def run_pp():
     """Main PP profiling entry point — called by every torchrun process."""
 
-    tp_per_pp = cfg.TP_SIZE_PER_PP  # 8
+    tp_per_pp = cfg.TP_SIZE_PER_PP  # 4
 
     if cfg.IS_LEADER:
         print(

@@ -1,6 +1,6 @@
 #!/bin/bash
 # ---------------------------------------------------------------------------
-# Launch PP=2 TP=4 profiling across TWO nodes via torchrun.
+# Launch PP=2 TP=4 GLM5.2 profiling across TWO nodes via torchrun.
 #
 # Usage (run on BOTH nodes, with different <node_rank>):
 #   Node 0 (192.168.0.63):  ./launch_pp.sh 0

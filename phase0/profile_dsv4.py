@@ -25,7 +25,7 @@ from phase0.results_utils import ALL_RESULTS, RESULTS_DIR, TIMESTAMP, write_repo
 from phase0.run_tp import run_tp
 
 if __name__ == "__main__":
-    for tp in [4, 8]:
+    for tp in [4]:
         try:
             run_tp(tp)
         except Exception as e:

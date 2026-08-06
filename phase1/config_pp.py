@@ -1,5 +1,5 @@
 """
-PP=2 multi-node constants for DeepSeek V4 Flash profiling.
+PP=2 multi-node constants for GLM5.2 profiling.
 """
 import os
 import sys
@@ -15,11 +15,11 @@ from phase0.config import (  # noqa: F401 — re-export for convenience
     GPU_MEM_UTIL,
     KV_CACHE_DTYPE,
     MAX_MODEL_LEN,
-    MODEL_PATH,
     OUTPUT_LEN,
 )
 
 # ---- PP / TP / multi-node ----
+MODEL_PATH = "/data/model/GLM-5.2-FP8"
 PP_SIZE = 2
 TP_SIZE_PER_PP = 4         # each PP stage uses 4 GPUs on the node
 WORLD_SIZE_PP = PP_SIZE * TP_SIZE_PER_PP  # 8 — total workers across both nodes
