@@ -119,7 +119,13 @@ def write_report_and_summary(title: str = "TP=4 vs TP=8 对比"):
     for r in ALL_RESULTS:
         tp = r["tp"]
         ctx = r["context_length"]
-        gpu_str = "  ".join(f"GPU{i}: {r[f'gpu{i}_mem_mb']:.0f}MB" for i in range(tp))
+        # Derive TP count from row keys to handle both phase0 (int tp) and
+        # phase1 (string tag like "PP2_TP8") without a TypeError on range(tp).
+        gpu_keys = sorted(
+            [k for k in r if k.startswith("gpu") and k.endswith("_mem_mb")],
+            key=lambda k: int(k.replace("gpu", "").replace("_mem_mb", "")),
+        )
+        gpu_str = "  ".join(f"{k.replace('_mem_mb', '')}: {r[k]:.0f}MB" for k in gpu_keys)
         lines.append(
             f"TP={tp}  ctx={ctx:>5d}  |  "
             f"prompt={r['prompt_tokens']:>5d}tok  output={r['output_tokens']:>3d}tok  |  "

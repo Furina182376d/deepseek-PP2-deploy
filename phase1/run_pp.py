@@ -201,6 +201,7 @@ def run_pp():
             # Build result row (tagged with PP info via the tp field convention)
             row = {
                 "tp": f"PP{cfg.PP_SIZE}_TP{tp_per_pp}",
+                "tp_size": tp_per_pp,       # actual TP count (int) — used by report generator
                 "context_length": ctx_len,
                 "prompt_tokens": result["prompt_tok"],
                 "output_tokens": result["out_tok"],
