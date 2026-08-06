@@ -129,7 +129,8 @@ def run_pp():
         gpu_memory_utilization=cfg.GPU_MEM_UTIL,
         trust_remote_code=True,
         kv_cache_dtype=cfg.KV_CACHE_DTYPE,
-        enforce_eager=False,
+        enforce_eager=True,           # disable CUDA graphs to save GPU memory
+        max_num_seqs=64,              # limit concurrent sequences → smaller KV cache pool
         disable_log_stats=False,
         distributed_executor_backend=cfg.DISTRIBUTED_EXECUTOR_BACKEND,
         # Multi-node settings forwarded via EngineArgs

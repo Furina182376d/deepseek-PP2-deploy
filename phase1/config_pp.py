@@ -24,6 +24,13 @@ PP_SIZE = 2
 TP_SIZE_PER_PP = 8         # each PP stage uses 8 GPUs on the node
 WORLD_SIZE_PP = PP_SIZE * TP_SIZE_PER_PP  # 16 — total workers across both nodes
 
+# ---- Memory-saving overrides for PP TP=8 deployment ----
+# Lower GPU memory utilization to reduce OOM risk with larger TP groups.
+GPU_MEM_UTIL = 0.85
+# Cap max_model_len to actual profiling needs (max context 32768 + output 256 + margin).
+# This roughly halves KV-cache pre-allocation compared to the default 65536.
+MAX_MODEL_LEN = 33792
+
 NNODES = 2
 MASTER_ADDR = "192.168.0.63"
 MASTER_PORT = 29500
