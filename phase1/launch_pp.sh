@@ -1,6 +1,6 @@
 #!/bin/bash
 # ---------------------------------------------------------------------------
-# Launch PP=2 TP=8 GLM5.2 profiling across TWO nodes via torchrun.
+# Launch PP=2 TP=4 DeepSeek-V4-Flash profiling across TWO nodes via torchrun.
 #
 # Usage (run on BOTH nodes, with different <node_rank>):
 #   Node 0 (192.168.0.63):  ./launch_pp.sh 0
@@ -17,7 +17,7 @@ NODE_RANK="${1:?Usage: $0 <node_rank (0 or 1)>}"
 MASTER_ADDR="192.168.0.63"
 MASTER_PORT=29500
 NNODES=2
-NPROC_PER_NODE=8   # one process per GPU — 8 H20s used per node
+NPROC_PER_NODE=4   # one process per GPU — 4 H20s used per node (TP=4)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONDA_BASE="${HOME}/miniconda3"

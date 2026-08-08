@@ -1,5 +1,5 @@
 """
-PP=2 TP=8 multi-node constants for GLM5.2 profiling.
+PP=2 TP=4 multi-node constants for DeepSeek-V4-Flash profiling.
 """
 import os
 import sys
@@ -19,12 +19,12 @@ from phase0.config import (  # noqa: F401 — re-export for convenience
 )
 
 # ---- PP / TP / multi-node ----
-MODEL_PATH = "/data/model/GLM-5.2-FP8"
+MODEL_PATH = "/data/model/DeepSeek-V4-Flash-0731"
 PP_SIZE = 2
-TP_SIZE_PER_PP = 8         # each PP stage uses 8 GPUs on the node
-WORLD_SIZE_PP = PP_SIZE * TP_SIZE_PER_PP  # 16 — total workers across both nodes
+TP_SIZE_PER_PP = 4         # each PP stage uses 4 GPUs on the node (TP=4)
+WORLD_SIZE_PP = PP_SIZE * TP_SIZE_PER_PP  # 8 — total workers across both nodes
 
-# ---- Memory-saving overrides for PP TP=8 deployment ----
+# ---- Memory-saving overrides for PP TP=4 deployment ----
 # Lower GPU memory utilization to reduce OOM risk with larger TP groups.
 GPU_MEM_UTIL = 0.85
 # Cap max_model_len to actual profiling needs (max context 32768 + output 256 + margin).
