@@ -1,0 +1,41 @@
+DeepSeek V4 Flash — vLLM Profile Report
+Timestamp : 20260811_143227
+Model     : /data/model/DeepSeek-V4-Flash-0731
+Max Len   : 65536  |  GPU util: 0.9  |  KV dtype: fp8
+Output Len: 256 tokens (ignore_eos=True)
+
+【只加上enable_flashinfer_autotune=True】
+
+==============================================================================================================
+PER-RUN DETAILS
+==============================================================================================================
+TP=4  ctx=  512  |  prompt=  330tok  output=256tok  |  TTFT=   65.2ms  prefill=   55.4ms (    5955 tok/s)  decode=   102.5 tok/s (TPOT=  9.76ms)  total=    2554ms  |  avg_mem=  89041MB  [gpu0: 89041MB  gpu1: 89041MB  gpu2: 89041MB  gpu3: 89041MB]
+TP=4  ctx= 1024  |  prompt=  660tok  output=256tok  |  TTFT=   66.1ms  prefill=   56.3ms (   11714 tok/s)  decode=   102.3 tok/s (TPOT=  9.78ms)  total=    2560ms  |  avg_mem=  89041MB  [gpu0: 89041MB  gpu1: 89041MB  gpu2: 89041MB  gpu3: 89041MB]
+TP=4  ctx= 2048  |  prompt= 1328tok  output=256tok  |  TTFT=  380.5ms  prefill=  370.7ms (    3582 tok/s)  decode=   102.0 tok/s (TPOT=  9.81ms)  total=    2882ms  |  avg_mem=  89041MB  [gpu0: 89041MB  gpu1: 89041MB  gpu2: 89041MB  gpu3: 89041MB]
+TP=4  ctx= 4096  |  prompt= 2655tok  output=256tok  |  TTFT=  410.2ms  prefill=  400.3ms (    6632 tok/s)  decode=   101.2 tok/s (TPOT=  9.89ms)  total=    2931ms  |  avg_mem=  89043MB  [gpu0: 89043MB  gpu1: 89043MB  gpu2: 89043MB  gpu3: 89043MB]
+TP=4  ctx= 8192  |  prompt= 5312tok  output=256tok  |  TTFT=  375.4ms  prefill=  365.6ms (   14530 tok/s)  decode=   101.2 tok/s (TPOT=  9.88ms)  total=    2895ms  |  avg_mem=  89043MB  [gpu0: 89043MB  gpu1: 89043MB  gpu2: 89043MB  gpu3: 89043MB]
+TP=4  ctx=16384  |  prompt=10626tok  output=256tok  |  TTFT=  675.1ms  prefill=  665.2ms (   15973 tok/s)  decode=   101.0 tok/s (TPOT=  9.90ms)  total=    3199ms  |  avg_mem=  89045MB  [gpu0: 89045MB  gpu1: 89045MB  gpu2: 89045MB  gpu3: 89045MB]
+TP=4  ctx=32768  |  prompt=21261tok  output=256tok  |  TTFT= 1381.8ms  prefill= 1371.8ms (   15499 tok/s)  decode=   100.3 tok/s (TPOT=  9.97ms)  total=    3922ms  |  avg_mem=  90393MB  [gpu0: 90393MB  gpu1: 90393MB  gpu2: 90393MB  gpu3: 90393MB]
+
+==============================================================================================================
+TP=4 VS TP=8 对比
+==============================================================================================================
+   ctx |                                       —— TP={t} ——
+       |  ttft_ms prefill_t/s decode_t/s  TPOT_ms avg_mem_mb
+--------------------------------------------------------------
+   512 |     65.2       5955      102.5     9.76      89041
+  1024 |     66.1      11714      102.3     9.78      89041
+  2048 |    380.5       3582      102.0     9.81      89041
+  4096 |    410.2       6632      101.2     9.89      89043
+  8192 |    375.4      14530      101.2     9.88      89043
+ 16384 |    675.1      15973      101.0     9.90      89045
+ 32768 |   1381.8      15499      100.3     9.97      90393
+
+==============================================================================================================
+FILES IN THIS RUN
+  tp4.csv      — 4 详细结果
+  full_results.json — 全部结果 (含元数据)
+  report.txt       — 本文件
+
+
+只加上enable_flashinfer_autotune=True不会修好2048的问题

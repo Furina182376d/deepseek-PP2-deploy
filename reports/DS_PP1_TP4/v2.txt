@@ -1,0 +1,69 @@
+DeepSeek V4 Flash — vLLM Profile Report
+Timestamp : 20260811_140755
+Model     : /data/model/DeepSeek-V4-Flash-0731
+Max Len   : 65536  |  GPU util: 0.9  |  KV dtype: fp8
+Output Len: 256 tokens (ignore_eos=True)
+
+llm = LLM(
+    model=config.MODEL_PATH,
+    tensor_parallel_size=tp,
+    max_model_len=config.MAX_MODEL_LEN,
+    gpu_memory_utilization=config.GPU_MEM_UTIL,
+    trust_remote_code=True,
+    kv_cache_dtype=config.KV_CACHE_DTYPE,
+    enforce_eager=False,
+    disable_log_stats=False,  # required for per-request timing metrics (TTFT, TPOT, etc.)
+    enable_chunked_prefill=True, # 新增
+    max_num_batched_tokens=2048, # 新增
+)
+
+==============================================================================================================
+PER-RUN DETAILS
+==============================================================================================================
+TP=4  ctx=  512  |  prompt=  330tok  output=256tok  |  TTFT=   67.7ms  prefill=   57.8ms (    5707 tok/s)  decode=   101.6 tok/s (TPOT=  9.84ms)  total=    2578ms  |  avg_mem=  90609MB  [gpu0: 90609MB  gpu1: 90609MB  gpu2: 90609MB  gpu3: 90609MB]
+TP=4  ctx= 1024  |  prompt=  660tok  output=256tok  |  TTFT=   68.9ms  prefill=   59.0ms (   11176 tok/s)  decode=   101.4 tok/s (TPOT=  9.86ms)  total=    2585ms  |  avg_mem=  90609MB  [gpu0: 90609MB  gpu1: 90609MB  gpu2: 90609MB  gpu3: 90609MB]
+TP=4  ctx= 2048  |  prompt= 1328tok  output=256tok  |  TTFT=  396.8ms  prefill=  386.9ms (    3432 tok/s)  decode=   101.3 tok/s (TPOT=  9.87ms)  total=    2915ms  |  avg_mem=  90609MB  [gpu0: 90609MB  gpu1: 90609MB  gpu2: 90609MB  gpu3: 90609MB]
+TP=4  ctx= 4096  |  prompt= 2655tok  output=256tok  |  TTFT=  418.2ms  prefill=  408.2ms (    6505 tok/s)  decode=   100.0 tok/s (TPOT= 10.00ms)  total=    2968ms  |  avg_mem=  90609MB  [gpu0: 90609MB  gpu1: 90609MB  gpu2: 90609MB  gpu3: 90609MB]
+TP=4  ctx= 8192  |  prompt= 5312tok  output=256tok  |  TTFT=30973.4ms  prefill=30963.4ms (     172 tok/s)  decode=   100.6 tok/s (TPOT=  9.94ms)  total=   33507ms  |  avg_mem=  90611MB  [gpu0: 90611MB  gpu1: 90611MB  gpu2: 90611MB  gpu3: 90611MB]
+TP=4  ctx=16384  |  prompt=10626tok  output=256tok  |  TTFT=  806.4ms  prefill=  796.3ms (   13344 tok/s)  decode=    99.7 tok/s (TPOT= 10.03ms)  total=    3364ms  |  avg_mem=  90611MB  [gpu0: 90611MB  gpu1: 90611MB  gpu2: 90611MB  gpu3: 90611MB]
+TP=4  ctx=32768  |  prompt=21261tok  output=256tok  |  TTFT=17348.7ms  prefill=17338.7ms (    1226 tok/s)  decode=   100.2 tok/s (TPOT=  9.98ms)  total=   19894ms  |  avg_mem=  90611MB  [gpu0: 90611MB  gpu1: 90611MB  gpu2: 90611MB  gpu3: 90611MB]
+
+==============================================================================================================
+TP=4 VS TP=8 对比
+==============================================================================================================
+   ctx |                                       —— TP={t} ——
+       |  ttft_ms prefill_t/s decode_t/s  TPOT_ms avg_mem_mb
+--------------------------------------------------------------
+   512 |     67.7       5707      101.6     9.84      90609
+  1024 |     68.9      11176      101.4     9.86      90609
+  2048 |    396.8       3432      101.3     9.87      90609
+  4096 |    418.2       6505      100.0    10.00      90609
+  8192 |  30973.4        172      100.6     9.94      90611
+ 16384 |    806.4      13344       99.7    10.03      90611
+ 32768 |  17348.7       1226      100.2     9.98      90611
+
+==============================================================================================================
+FILES IN THIS RUN
+  tp4.csv      — 4 详细结果
+  full_results.json — 全部结果 (含元数据)
+  report.txt       — 本文件
+
+
+分析：
+设置的是：
+
+enable_chunked_prefill=True,
+max_num_batched_tokens=2048,
+
+这意味着一个 5312 token 的 prompt（ctx=8192）会被切成至少 3 个 chunk（2048 + 2048 + 1216），每个 chunk 单独执行一次 prefill 前向。
+
+问题出在运行时日志里反复出现的这些行：
+
+text
+TileLang begins to compile kernel `mhc_pre_big_fuse_broadcast_with_norm_tilelang` ...
+TileLang completes to compile kernel ...
+每一次这样的编译都要花 10 秒左右。
+而你的 CUDA Graph 捕获的尺寸只覆盖了 decode 阶段常见的 batch size（1~512 序列数），并没有覆盖到 chunked prefill 产生的这些新 token 形状。
+因此每处理一个新的 chunk 形状，TileLang 都会现场编译一次，累计延迟直接把 TTFT 炸到了 30 秒（ctx=8192）和 17 秒（ctx=32768）。
+
+短上下文（≤4096）之所以没崩，是因为 prompt 长度 <= 2×2048，chunk 数量少，编译次数有限，总开销还在几百毫秒量级，被掩盖了。

@@ -1,0 +1,52 @@
+DeepSeek V4 Flash — vLLM Profile Report
+Timestamp : 20260811_144919
+Model     : /data/model/DeepSeek-V4-Flash-0731
+Max Len   : 32768  |  GPU util: 0.9  |  KV dtype: fp8
+Output Len: 256 tokens (ignore_eos=True)
+
+"""
+Shared constants for GLM-5.2 FP8 profiling.
+"""
+
+MODEL_PATH = "/data/model/DeepSeek-V4-Flash-0731"
+# MODEL_PATH = "/data/model/GLM-5.2-FP8"
+CONTEXT_LENGTHS = [512, 1024, 2048, 4096, 8192, 16384, 32768]
+OUTPUT_LEN = 256
+MAX_MODEL_LEN = 32768 # 唯一变化
+GPU_MEM_UTIL = 0.90
+KV_CACHE_DTYPE = "fp8"
+
+==============================================================================================================
+PER-RUN DETAILS
+==============================================================================================================
+TP=4  ctx=  512  |  prompt=  330tok  output=256tok  |  TTFT=   69.4ms  prefill=   59.6ms (    5535 tok/s)  decode=   101.9 tok/s (TPOT=  9.81ms)  total=    2572ms  |  avg_mem=  89033MB  [gpu0: 89033MB  gpu1: 89033MB  gpu2: 89033MB  gpu3: 89033MB]
+TP=4  ctx= 1024  |  prompt=  660tok  output=256tok  |  TTFT=   69.9ms  prefill=   60.1ms (   10981 tok/s)  decode=   101.8 tok/s (TPOT=  9.82ms)  total=    2575ms  |  avg_mem=  89033MB  [gpu0: 89033MB  gpu1: 89033MB  gpu2: 89033MB  gpu3: 89033MB]
+TP=4  ctx= 2048  |  prompt= 1328tok  output=256tok  |  TTFT=  393.2ms  prefill=  383.4ms (    3464 tok/s)  decode=   101.6 tok/s (TPOT=  9.84ms)  total=    2904ms  |  avg_mem=  89033MB  [gpu0: 89033MB  gpu1: 89033MB  gpu2: 89033MB  gpu3: 89033MB]
+TP=4  ctx= 4096  |  prompt= 2655tok  output=256tok  |  TTFT=  417.3ms  prefill=  407.4ms (    6517 tok/s)  decode=   100.9 tok/s (TPOT=  9.91ms)  total=    2945ms  |  avg_mem=  89035MB  [gpu0: 89035MB  gpu1: 89035MB  gpu2: 89035MB  gpu3: 89035MB]
+TP=4  ctx= 8192  |  prompt= 5312tok  output=256tok  |  TTFT=  377.6ms  prefill=  367.6ms (   14450 tok/s)  decode=   100.7 tok/s (TPOT=  9.93ms)  total=    2910ms  |  avg_mem=  89035MB  [gpu0: 89035MB  gpu1: 89035MB  gpu2: 89035MB  gpu3: 89035MB]
+TP=4  ctx=16384  |  prompt=10626tok  output=256tok  |  TTFT=  676.1ms  prefill=  666.1ms (   15952 tok/s)  decode=   100.8 tok/s (TPOT=  9.92ms)  total=    3206ms  |  avg_mem=  89035MB  [gpu0: 89035MB  gpu1: 89035MB  gpu2: 89035MB  gpu3: 89035MB]
+TP=4  ctx=32768  |  prompt=21261tok  output=256tok  |  TTFT= 1362.2ms  prefill= 1352.3ms (   15723 tok/s)  decode=   100.4 tok/s (TPOT=  9.96ms)  total=    3902ms  |  avg_mem=  90385MB  [gpu0: 90385MB  gpu1: 90385MB  gpu2: 90385MB  gpu3: 90385MB]
+
+==============================================================================================================
+TP=4 VS TP=8 对比
+==============================================================================================================
+   ctx |                                       —— TP={t} ——
+       |  ttft_ms prefill_t/s decode_t/s  TPOT_ms avg_mem_mb
+--------------------------------------------------------------
+   512 |     69.4       5535      101.9     9.81      89033
+  1024 |     69.9      10981      101.8     9.82      89033
+  2048 |    393.2       3464      101.6     9.84      89033
+  4096 |    417.3       6517      100.9     9.91      89035
+  8192 |    377.6      14450      100.7     9.93      89035
+ 16384 |    676.1      15952      100.8     9.92      89035
+ 32768 |   1362.2      15723      100.4     9.96      90385
+
+==============================================================================================================
+FILES IN THIS RUN
+  tp4.csv      — 4 详细结果
+  full_results.json — 全部结果 (含元数据)
+  report.txt       — 本文件
+
+
+
+只修改MAX_MODEL_LEN不会修好2048的问题

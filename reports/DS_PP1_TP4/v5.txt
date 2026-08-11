@@ -1,0 +1,83 @@
+变化：
+#!/bin/bash
+source /home/tjy/miniconda3/etc/profile.d/conda.sh 2>/dev/null || true
+conda activate vllm
+
+# 自动创建 libcuda.so 软链接（如果缺失）
+if [ ! -f "$CONDA_PREFIX/lib64/libcuda.so" ]; then
+    ln -sf /usr/lib/x86_64-linux-gnu/libcuda.so "$CONDA_PREFIX/lib64/libcuda.so"
+fi
+# 屏蔽可能存在的 stub（防止运行时加载错误的 stub 库）
+if [ -f "$CONDA_PREFIX/lib64/stubs/libcuda.so" ] && [ ! -f "$CONDA_PREFIX/lib64/stubs/libcuda.so.bak" ]; then
+    mv "$CONDA_PREFIX/lib64/stubs/libcuda.so" "$CONDA_PREFIX/lib64/stubs/libcuda.so.bak"
+fi
+
+export CUDA_HOME=$CONDA_PREFIX
+export CPATH=$CUDA_HOME/targets/x86_64-linux/include:$CPATH
+export C_INCLUDE_PATH=$CUDA_HOME/targets/x86_64-linux/include:$C_INCLUDE_PATH
+export CPLUS_INCLUDE_PATH=$CUDA_HOME/targets/x86_64-linux/include:$CPLUS_INCLUDE_PATH
+
+# 保持 conda lib 优先（解决 libstdc++ 版本），但系统路径放在后面保底
+export LD_LIBRARY_PATH=$CUDA_HOME/lib:$CUDA_HOME/lib64:$CUDA_HOME/targets/x86_64-linux/lib:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+export LIBRARY_PATH=$CUDA_HOME/lib:$CUDA_HOME/lib64:$CUDA_HOME/targets/x86_64-linux/lib:/usr/lib/x86_64-linux-gnu:$LIBRARY_PATH
+
+rm -rf ~/.cache/flashinfer
+
+# ── NCCL optimizations for 4×H20 (NVLink 18, same NUMA node) ──
+# All-reduce in TP=4 decode is latency-bound (tiny tensors, many calls)
+export NCCL_PROTO=Simple          # lowest latency for small messages
+export NCCL_ALGO=Ring             # good for TP=4 ring
+export NCCL_P2P_LEVEL=NVL         # force NVLink (avoid PCIe fallback)
+export NCCL_MIN_NCHANNELS=4       # parallelize across 4 links
+export NCCL_IB_DISABLE=1          # no InfiniBand needed (single node)
+export NCCL_NVLS_ENABLE=0         # no NVSwitch on H20
+export NCCL_CROSS_NIC=0           # single NUMA node only
+# ──────────────────────────────────────────────────────────────
+
+CUDA_VISIBLE_DEVICES=4,5,6,7 python profile_dsv4.py
+
+
+
+
+
+
+
+DeepSeek V4 Flash — vLLM Profile Report
+Timestamp : 20260811_150755
+Model     : /data/model/DeepSeek-V4-Flash-0731
+Max Len   : 65536  |  GPU util: 0.9  |  KV dtype: fp8
+Output Len: 256 tokens (ignore_eos=True)
+
+==============================================================================================================
+PER-RUN DETAILS
+==============================================================================================================
+TP=4  ctx=  512  |  prompt=  330tok  output=256tok  |  TTFT=   67.2ms  prefill=   57.3ms (    5756 tok/s)  decode=   101.2 tok/s (TPOT=  9.88ms)  total=    2588ms  |  avg_mem=  89041MB  [gpu0: 89041MB  gpu1: 89041MB  gpu2: 89041MB  gpu3: 89041MB]
+TP=4  ctx= 1024  |  prompt=  660tok  output=256tok  |  TTFT=   68.3ms  prefill=   58.4ms (   11294 tok/s)  decode=   101.1 tok/s (TPOT=  9.90ms)  total=    2592ms  |  avg_mem=  89041MB  [gpu0: 89041MB  gpu1: 89041MB  gpu2: 89041MB  gpu3: 89041MB]
+TP=4  ctx= 2048  |  prompt= 1328tok  output=256tok  |  TTFT=  392.8ms  prefill=  382.9ms (    3468 tok/s)  decode=   100.7 tok/s (TPOT=  9.93ms)  total=    2925ms  |  avg_mem=  89041MB  [gpu0: 89041MB  gpu1: 89041MB  gpu2: 89041MB  gpu3: 89041MB]
+TP=4  ctx= 4096  |  prompt= 2655tok  output=256tok  |  TTFT=  414.4ms  prefill=  404.4ms (    6565 tok/s)  decode=   100.4 tok/s (TPOT=  9.96ms)  total=    2955ms  |  avg_mem=  89043MB  [gpu0: 89043MB  gpu1: 89043MB  gpu2: 89043MB  gpu3: 89043MB]
+TP=4  ctx= 8192  |  prompt= 5312tok  output=256tok  |  TTFT=  375.4ms  prefill=  365.5ms (   14534 tok/s)  decode=   100.4 tok/s (TPOT=  9.96ms)  total=    2915ms  |  avg_mem=  89043MB  [gpu0: 89043MB  gpu1: 89043MB  gpu2: 89043MB  gpu3: 89043MB]
+TP=4  ctx=16384  |  prompt=10626tok  output=256tok  |  TTFT=  676.1ms  prefill=  666.1ms (   15952 tok/s)  decode=   100.1 tok/s (TPOT=  9.99ms)  total=    3224ms  |  avg_mem=  89045MB  [gpu0: 89045MB  gpu1: 89045MB  gpu2: 89045MB  gpu3: 89045MB]
+TP=4  ctx=32768  |  prompt=21261tok  output=256tok  |  TTFT= 1385.8ms  prefill= 1375.7ms (   15454 tok/s)  decode=    99.5 tok/s (TPOT= 10.05ms)  total=    3948ms  |  avg_mem=  90393MB  [gpu0: 90393MB  gpu1: 90393MB  gpu2: 90393MB  gpu3: 90393MB]
+
+==============================================================================================================
+TP=4 VS TP=8 对比
+==============================================================================================================
+   ctx |                                       —— TP={t} ——
+       |  ttft_ms prefill_t/s decode_t/s  TPOT_ms avg_mem_mb
+--------------------------------------------------------------
+   512 |     67.2       5756      101.2     9.88      89041
+  1024 |     68.3      11294      101.1     9.90      89041
+  2048 |    392.8       3468      100.7     9.93      89041
+  4096 |    414.4       6565      100.4     9.96      89043
+  8192 |    375.4      14534      100.4     9.96      89043
+ 16384 |    676.1      15952      100.1     9.99      89045
+ 32768 |   1385.8      15454       99.5    10.05      90393
+
+==============================================================================================================
+FILES IN THIS RUN
+  tp4.csv      — 4 详细结果
+  full_results.json — 全部结果 (含元数据)
+  report.txt       — 本文件
+
+
+【说明NCCL optimizations也不能解决2048的问题】
