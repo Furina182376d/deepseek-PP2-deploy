@@ -35,6 +35,8 @@ def run_tp(tp: int):
         kv_cache_dtype=config.KV_CACHE_DTYPE,
         enforce_eager=False,
         disable_log_stats=False,  # required for per-request timing metrics (TTFT, TPOT, etc.)
+        enable_chunked_prefill=True,
+        max_num_batched_tokens=2048,
     )
     print("Model loaded.\n")
 
