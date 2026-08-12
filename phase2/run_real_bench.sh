@@ -23,4 +23,4 @@ export LIBRARY_PATH=$CUDA_HOME/lib:$CUDA_HOME/lib64:$CUDA_HOME/targets/x86_64-li
 
 rm -rf ~/.cache/flashinfer
 
-CUDA_VISIBLE_DEVICES=4,5,6,7 python profile_dsv4_real.py
+CUDA_VISIBLE_DEVICES=4,5,6,7 python run_longbench.py

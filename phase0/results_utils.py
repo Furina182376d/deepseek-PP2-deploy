@@ -29,27 +29,30 @@ def ensure_results_dir():
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
 
-def csv_path(tp: int) -> str:
-    return os.path.join(RESULTS_DIR, f"tp{tp}.csv")
+def csv_path(tp: int, tag: str | None = None) -> str:
+    name = tag if tag else f"tp{tp}"
+    return os.path.join(RESULTS_DIR, f"{name}.csv")
 
 
-def csv_headers(tp: int) -> list[str]:
+def csv_headers(tp: int, extra_fields: list[str] | None = None) -> list[str]:
     cols = [
         "tp", "context_length", "prompt_tokens", "output_tokens",
         "ttft_ms", "prefill_ms", "prefill_tps", "decode_tps", "tpot_ms", "total_ms",
         "avg_gpu_mem_mb",
     ]
+    if extra_fields:
+        cols += extra_fields
     cols += [f"gpu{i}_mem_mb" for i in range(tp)]
     return cols
 
 
-def open_csv(tp: int):
+def open_csv(tp: int, tag: str | None = None, extra_fields: list[str] | None = None):
     """Open the per-TP CSV file and write its header."""
     global _csv_file, _csv_writer
     if _csv_file:
         _csv_file.close()
-    _csv_file = open(csv_path(tp), "w", newline="")
-    _csv_writer = csv.DictWriter(_csv_file, fieldnames=csv_headers(tp))
+    _csv_file = open(csv_path(tp, tag), "w", newline="")
+    _csv_writer = csv.DictWriter(_csv_file, fieldnames=csv_headers(tp, extra_fields))
     _csv_writer.writeheader()
     _csv_file.flush()
 
