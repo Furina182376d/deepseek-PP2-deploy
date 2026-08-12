@@ -182,7 +182,7 @@ def iter_needle_prompts(
 def list_available_datasets() -> dict[str, str]:
     """Return {name: status} for all known datasets."""
     available: dict[str, str] = {}
-    for task in ["narrative_qa", "qasper", "gov_report", "qmsum"]:
+    for task in ["narrativeqa", "qasper", "gov_report", "qmsum"]:
         available[task] = "local" if _find_local_json(task) else "not_found"
     available["needle_haystack"] = "builtin"
     return available

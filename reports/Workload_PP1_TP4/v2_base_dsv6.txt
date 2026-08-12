@@ -1,0 +1,177 @@
+DeepSeek V4 Flash — vLLM Profile Report
+Timestamp : 20260812_150506
+Model     : /data/model/DeepSeek-V4-Flash-0731
+Max Len   : 65536  |  GPU util: 0.9  |  KV dtype: fp8
+Output Len: 256 tokens (ignore_eos=True)
+
+==============================================================================================================
+PER-RUN DETAILS
+==============================================================================================================
+TP=TP4_longbench  ctx=31202  |  prompt=31202tok  output=256tok  |  TTFT=  140.5ms  prefill=  130.5ms (  239178 tok/s)  decode=    99.9 tok/s (TPOT= 10.01ms)  total=    2693ms  |  avg_mem=  92843MB  [gpu0: 92843MB  gpu1: 92843MB  gpu2: 92843MB  gpu3: 92843MB]
+TP=TP4_longbench  ctx=31990  |  prompt=31990tok  output=256tok  |  TTFT= 3578.3ms  prefill= 3568.3ms (    8965 tok/s)  decode=   100.0 tok/s (TPOT= 10.00ms)  total=    6127ms  |  avg_mem=  92843MB  [gpu0: 92843MB  gpu1: 92843MB  gpu2: 92843MB  gpu3: 92843MB]
+TP=TP4_longbench  ctx=31798  |  prompt=31798tok  output=256tok  |  TTFT= 3548.9ms  prefill= 3538.9ms (    8985 tok/s)  decode=   100.1 tok/s (TPOT=  9.99ms)  total=    6094ms  |  avg_mem=  92843MB  [gpu0: 92843MB  gpu1: 92843MB  gpu2: 92843MB  gpu3: 92843MB]
+TP=TP4_longbench  ctx=61470  |  prompt=61470tok  output=256tok  |  TTFT= 7311.6ms  prefill= 7301.5ms (    8419 tok/s)  decode=    99.5 tok/s (TPOT= 10.05ms)  total=    9874ms  |  avg_mem=  93371MB  [gpu0: 93371MB  gpu1: 93371MB  gpu2: 93371MB  gpu3: 93371MB]
+TP=TP4_longbench  ctx=11212  |  prompt=11212tok  output=256tok  |  TTFT= 1225.5ms  prefill= 1215.6ms (    9224 tok/s)  decode=   100.2 tok/s (TPOT=  9.98ms)  total=    3770ms  |  avg_mem=  93371MB  [gpu0: 93371MB  gpu1: 93371MB  gpu2: 93371MB  gpu3: 93371MB]
+TP=TP4_longbench  ctx=38010  |  prompt=38010tok  output=256tok  |  TTFT= 4366.2ms  prefill= 4356.1ms (    8726 tok/s)  decode=    99.4 tok/s (TPOT= 10.06ms)  total=    6931ms  |  avg_mem=  93371MB  [gpu0: 93371MB  gpu1: 93371MB  gpu2: 93371MB  gpu3: 93371MB]
+TP=TP4_longbench  ctx=38008  |  prompt=38008tok  output=256tok  |  TTFT=  156.7ms  prefill=  146.7ms (  259173 tok/s)  decode=   100.0 tok/s (TPOT= 10.00ms)  total=    2708ms  |  avg_mem=  93371MB  [gpu0: 93371MB  gpu1: 93371MB  gpu2: 93371MB  gpu3: 93371MB]
+TP=TP4_longbench  ctx= 7894  |  prompt= 7894tok  output=256tok  |  TTFT=  887.6ms  prefill=  877.7ms (    8994 tok/s)  decode=   100.9 tok/s (TPOT=  9.91ms)  total=    3416ms  |  avg_mem=  93371MB  [gpu0: 93371MB  gpu1: 93371MB  gpu2: 93371MB  gpu3: 93371MB]
+TP=TP4_longbench  ctx= 8907  |  prompt= 8907tok  output=256tok  |  TTFT=  986.9ms  prefill=  977.0ms (    9116 tok/s)  decode=   100.8 tok/s (TPOT=  9.93ms)  total=    3517ms  |  avg_mem=  93371MB  [gpu0: 93371MB  gpu1: 93371MB  gpu2: 93371MB  gpu3: 93371MB]
+TP=TP4_longbench  ctx=61465  |  prompt=61465tok  output=256tok  |  TTFT=  208.0ms  prefill=  198.0ms (  310469 tok/s)  decode=    99.5 tok/s (TPOT= 10.05ms)  total=    2770ms  |  avg_mem=  93371MB  [gpu0: 93371MB  gpu1: 93371MB  gpu2: 93371MB  gpu3: 93371MB]
+TP=TP4_longbench  ctx=11177  |  prompt=11177tok  output=256tok  |  TTFT= 1222.5ms  prefill= 1212.5ms (    9218 tok/s)  decode=   100.8 tok/s (TPOT=  9.92ms)  total=    3750ms  |  avg_mem=  93371MB  [gpu0: 93371MB  gpu1: 93371MB  gpu2: 93371MB  gpu3: 93371MB]
+TP=TP4_longbench  ctx=61467  |  prompt=61467tok  output=256tok  |  TTFT=  197.4ms  prefill=  187.3ms (  328107 tok/s)  decode=    99.8 tok/s (TPOT= 10.02ms)  total=    2754ms  |  avg_mem=  93371MB  [gpu0: 93371MB  gpu1: 93371MB  gpu2: 93371MB  gpu3: 93371MB]
+TP=TP4_longbench  ctx=13401  |  prompt=13401tok  output=256tok  |  TTFT= 1452.0ms  prefill= 1442.0ms (    9293 tok/s)  decode=   100.1 tok/s (TPOT=  9.99ms)  total=    3998ms  |  avg_mem=  93371MB  [gpu0: 93371MB  gpu1: 93371MB  gpu2: 93371MB  gpu3: 93371MB]
+TP=TP4_longbench  ctx=31984  |  prompt=31984tok  output=256tok  |  TTFT=  139.3ms  prefill=  129.3ms (  247410 tok/s)  decode=   100.0 tok/s (TPOT= 10.00ms)  total=    2690ms  |  avg_mem=  93371MB  [gpu0: 93371MB  gpu1: 93371MB  gpu2: 93371MB  gpu3: 93371MB]
+TP=TP4_longbench  ctx=48284  |  prompt=48284tok  output=256tok  |  TTFT= 5553.5ms  prefill= 5543.5ms (    8710 tok/s)  decode=    99.8 tok/s (TPOT= 10.02ms)  total=    8106ms  |  avg_mem=  93371MB  [gpu0: 93371MB  gpu1: 93371MB  gpu2: 93371MB  gpu3: 93371MB]
+TP=TP4_longbench  ctx= 8906  |  prompt= 8906tok  output=256tok  |  TTFT=   87.7ms  prefill=   77.8ms (  114520 tok/s)  decode=   101.2 tok/s (TPOT=  9.88ms)  total=    2608ms  |  avg_mem=  93371MB  [gpu0: 93371MB  gpu1: 93371MB  gpu2: 93371MB  gpu3: 93371MB]
+TP=TP4_longbench  ctx=48287  |  prompt=48287tok  output=256tok  |  TTFT=  174.1ms  prefill=  164.1ms (  294196 tok/s)  decode=   100.3 tok/s (TPOT=  9.97ms)  total=    2718ms  |  avg_mem=  93371MB  [gpu0: 93371MB  gpu1: 93371MB  gpu2: 93371MB  gpu3: 93371MB]
+TP=TP4_longbench  ctx=48283  |  prompt=48283tok  output=256tok  |  TTFT=  172.4ms  prefill=  162.4ms (  297277 tok/s)  decode=   100.3 tok/s (TPOT=  9.97ms)  total=    2717ms  |  avg_mem=  93371MB  [gpu0: 93371MB  gpu1: 93371MB  gpu2: 93371MB  gpu3: 93371MB]
+TP=TP4_longbench  ctx= 2710  |  prompt= 2710tok  output=256tok  |  TTFT=   72.2ms  prefill=   62.3ms (   43499 tok/s)  decode=   101.2 tok/s (TPOT=  9.88ms)  total=    2593ms  |  avg_mem=  93371MB  [gpu0: 93371MB  gpu1: 93371MB  gpu2: 93371MB  gpu3: 93371MB]
+TP=TP4_longbench  ctx= 2693  |  prompt= 2693tok  output=256tok  |  TTFT=  361.7ms  prefill=  351.8ms (    7655 tok/s)  decode=   101.0 tok/s (TPOT=  9.90ms)  total=    2887ms  |  avg_mem=  93371MB  [gpu0: 93371MB  gpu1: 93371MB  gpu2: 93371MB  gpu3: 93371MB]
+TP=TP4_longbench  ctx= 5456  |  prompt= 5456tok  output=256tok  |  TTFT=  645.1ms  prefill=  635.2ms (    8589 tok/s)  decode=   101.0 tok/s (TPOT=  9.91ms)  total=    3171ms  |  avg_mem=  93371MB  [gpu0: 93371MB  gpu1: 93371MB  gpu2: 93371MB  gpu3: 93371MB]
+TP=TP4_longbench  ctx= 4857  |  prompt= 4857tok  output=256tok  |  TTFT=  569.0ms  prefill=  559.1ms (    8688 tok/s)  decode=   101.2 tok/s (TPOT=  9.88ms)  total=    3088ms  |  avg_mem=  93371MB  [gpu0: 93371MB  gpu1: 93371MB  gpu2: 93371MB  gpu3: 93371MB]
+TP=TP4_longbench  ctx= 5762  |  prompt= 5762tok  output=256tok  |  TTFT=  674.4ms  prefill=  664.5ms (    8672 tok/s)  decode=   101.1 tok/s (TPOT=  9.89ms)  total=    3197ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx= 3102  |  prompt= 3102tok  output=256tok  |  TTFT=  409.7ms  prefill=  399.8ms (    7758 tok/s)  decode=   101.2 tok/s (TPOT=  9.89ms)  total=    2931ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx=20868  |  prompt=20868tok  output=256tok  |  TTFT= 2347.4ms  prefill= 2337.5ms (    8928 tok/s)  decode=   100.2 tok/s (TPOT=  9.98ms)  total=    4892ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx=10432  |  prompt=10432tok  output=256tok  |  TTFT= 1153.4ms  prefill= 1143.5ms (    9123 tok/s)  decode=   100.9 tok/s (TPOT=  9.91ms)  total=    3681ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx= 3831  |  prompt= 3831tok  output=256tok  |  TTFT=  474.4ms  prefill=  464.5ms (    8248 tok/s)  decode=   100.7 tok/s (TPOT=  9.93ms)  total=    3006ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx= 2987  |  prompt= 2987tok  output=256tok  |  TTFT=  388.6ms  prefill=  378.7ms (    7888 tok/s)  decode=   100.9 tok/s (TPOT=  9.91ms)  total=    2916ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx= 3644  |  prompt= 3644tok  output=256tok  |  TTFT=  460.5ms  prefill=  450.5ms (    8088 tok/s)  decode=   100.8 tok/s (TPOT=  9.92ms)  total=    2990ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx= 3362  |  prompt= 3362tok  output=256tok  |  TTFT=  435.1ms  prefill=  425.2ms (    7907 tok/s)  decode=   100.9 tok/s (TPOT=  9.91ms)  total=    2961ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx= 5052  |  prompt= 5052tok  output=256tok  |  TTFT=  604.6ms  prefill=  594.7ms (    8495 tok/s)  decode=   100.8 tok/s (TPOT=  9.92ms)  total=    3134ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx= 5423  |  prompt= 5423tok  output=256tok  |  TTFT=  639.9ms  prefill=  630.0ms (    8608 tok/s)  decode=   100.8 tok/s (TPOT=  9.92ms)  total=    3168ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx= 4271  |  prompt= 4271tok  output=256tok  |  TTFT=  520.9ms  prefill=  510.9ms (    8359 tok/s)  decode=   100.7 tok/s (TPOT=  9.93ms)  total=    3054ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx= 3272  |  prompt= 3272tok  output=256tok  |  TTFT=  422.4ms  prefill=  412.5ms (    7932 tok/s)  decode=   100.8 tok/s (TPOT=  9.92ms)  total=    2952ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx= 6262  |  prompt= 6262tok  output=256tok  |  TTFT=  726.2ms  prefill=  716.3ms (    8742 tok/s)  decode=   100.9 tok/s (TPOT=  9.91ms)  total=    3254ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx= 5141  |  prompt= 5141tok  output=256tok  |  TTFT=  612.4ms  prefill=  602.5ms (    8533 tok/s)  decode=   100.8 tok/s (TPOT=  9.92ms)  total=    3142ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx= 5061  |  prompt= 5061tok  output=256tok  |  TTFT=  603.0ms  prefill=  593.1ms (    8534 tok/s)  decode=   100.8 tok/s (TPOT=  9.92ms)  total=    3132ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx= 2939  |  prompt= 2939tok  output=256tok  |  TTFT=  385.0ms  prefill=  375.1ms (    7835 tok/s)  decode=   100.7 tok/s (TPOT=  9.93ms)  total=    2917ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx= 4181  |  prompt= 4181tok  output=256tok  |  TTFT=   77.7ms  prefill=   67.7ms (   61722 tok/s)  decode=   100.7 tok/s (TPOT=  9.93ms)  total=    2610ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx=10344  |  prompt=10344tok  output=256tok  |  TTFT= 1145.0ms  prefill= 1135.0ms (    9113 tok/s)  decode=   100.7 tok/s (TPOT=  9.93ms)  total=    3675ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx= 4145  |  prompt= 4145tok  output=256tok  |  TTFT=  506.3ms  prefill=  496.3ms (    8351 tok/s)  decode=   100.7 tok/s (TPOT=  9.93ms)  total=    3038ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx=12187  |  prompt=12187tok  output=256tok  |  TTFT= 1327.5ms  prefill= 1317.6ms (    9249 tok/s)  decode=   100.7 tok/s (TPOT=  9.93ms)  total=    3858ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx= 6384  |  prompt= 6384tok  output=256tok  |  TTFT=  735.0ms  prefill=  725.1ms (    8805 tok/s)  decode=   101.0 tok/s (TPOT=  9.90ms)  total=    3260ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx= 8590  |  prompt= 8590tok  output=256tok  |  TTFT=  951.9ms  prefill=  942.0ms (    9119 tok/s)  decode=   100.9 tok/s (TPOT=  9.91ms)  total=    3477ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx= 7717  |  prompt= 7717tok  output=256tok  |  TTFT=  868.5ms  prefill=  858.6ms (    8988 tok/s)  decode=   100.8 tok/s (TPOT=  9.92ms)  total=    3397ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx= 2047  |  prompt= 2047tok  output=256tok  |  TTFT=  492.1ms  prefill=  482.2ms (    4245 tok/s)  decode=   101.1 tok/s (TPOT=  9.89ms)  total=    3015ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx=13394  |  prompt=13394tok  output=256tok  |  TTFT= 1456.7ms  prefill= 1446.8ms (    9258 tok/s)  decode=   101.0 tok/s (TPOT=  9.90ms)  total=    3981ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx= 7752  |  prompt= 7752tok  output=256tok  |  TTFT=  873.8ms  prefill=  863.9ms (    8973 tok/s)  decode=   101.0 tok/s (TPOT=  9.90ms)  total=    3399ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx= 8154  |  prompt= 8154tok  output=256tok  |  TTFT=  912.5ms  prefill=  902.6ms (    9034 tok/s)  decode=   101.0 tok/s (TPOT=  9.90ms)  total=    3436ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx=10432  |  prompt=10432tok  output=256tok  |  TTFT= 1152.5ms  prefill= 1142.6ms (    9130 tok/s)  decode=   101.0 tok/s (TPOT=  9.90ms)  total=    3677ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx=11381  |  prompt=11381tok  output=256tok  |  TTFT= 1250.5ms  prefill= 1240.6ms (    9174 tok/s)  decode=   100.9 tok/s (TPOT=  9.91ms)  total=    3777ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx=17352  |  prompt=17352tok  output=256tok  |  TTFT= 1968.9ms  prefill= 1959.0ms (    8858 tok/s)  decode=   100.6 tok/s (TPOT=  9.94ms)  total=    4504ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx= 6359  |  prompt= 6359tok  output=256tok  |  TTFT=  732.6ms  prefill=  722.7ms (    8799 tok/s)  decode=   101.1 tok/s (TPOT=  9.89ms)  total=    3254ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx= 3926  |  prompt= 3926tok  output=256tok  |  TTFT=  482.9ms  prefill=  473.1ms (    8299 tok/s)  decode=   101.1 tok/s (TPOT=  9.89ms)  total=    3004ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx=15449  |  prompt=15449tok  output=256tok  |  TTFT= 1679.7ms  prefill= 1669.8ms (    9252 tok/s)  decode=   101.1 tok/s (TPOT=  9.89ms)  total=    4200ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx=16662  |  prompt=16662tok  output=256tok  |  TTFT= 1837.9ms  prefill= 1828.0ms (    9115 tok/s)  decode=   100.8 tok/s (TPOT=  9.92ms)  total=    4369ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx= 5795  |  prompt= 5795tok  output=256tok  |  TTFT=  674.5ms  prefill=  664.6ms (    8719 tok/s)  decode=   101.2 tok/s (TPOT=  9.88ms)  total=    3193ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx=43433  |  prompt=43433tok  output=256tok  |  TTFT= 5013.0ms  prefill= 5003.0ms (    8682 tok/s)  decode=   100.0 tok/s (TPOT= 10.00ms)  total=    7561ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx= 6583  |  prompt= 6583tok  output=256tok  |  TTFT=   81.6ms  prefill=   71.8ms (   91735 tok/s)  decode=   101.2 tok/s (TPOT=  9.88ms)  total=    2601ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx=17230  |  prompt=17230tok  output=256tok  |  TTFT= 2149.4ms  prefill= 2139.5ms (    8053 tok/s)  decode=   100.8 tok/s (TPOT=  9.92ms)  total=    4680ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx=19358  |  prompt=19358tok  output=256tok  |  TTFT= 2176.7ms  prefill= 2166.8ms (    8934 tok/s)  decode=   100.8 tok/s (TPOT=  9.92ms)  total=    4706ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx=25275  |  prompt=25275tok  output=256tok  |  TTFT= 2827.2ms  prefill= 2817.2ms (    8972 tok/s)  decode=   100.7 tok/s (TPOT=  9.93ms)  total=    5359ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx=29915  |  prompt=29915tok  output=256tok  |  TTFT= 3341.7ms  prefill= 3331.8ms (    8979 tok/s)  decode=   100.6 tok/s (TPOT=  9.94ms)  total=    5876ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx=17694  |  prompt=17694tok  output=256tok  |  TTFT= 2186.7ms  prefill= 2176.7ms (    8129 tok/s)  decode=   100.0 tok/s (TPOT= 10.00ms)  total=    4737ms  |  avg_mem=  93373MB  [gpu0: 93373MB  gpu1: 93373MB  gpu2: 93373MB  gpu3: 93373MB]
+TP=TP4_longbench  ctx=12693  |  prompt=12693tok  output=256tok  |  TTFT= 1382.9ms  prefill= 1373.0ms (    9244 tok/s)  decode=   101.6 tok/s (TPOT=  9.84ms)  total=    3892ms  |  avg_mem=  93375MB  [gpu0: 93375MB  gpu1: 93375MB  gpu2: 93375MB  gpu3: 93375MB]
+TP=TP4_longbench  ctx=10074  |  prompt=10074tok  output=256tok  |  TTFT= 1115.0ms  prefill= 1105.1ms (    9116 tok/s)  decode=   101.3 tok/s (TPOT=  9.87ms)  total=    3630ms  |  avg_mem=  93375MB  [gpu0: 93375MB  gpu1: 93375MB  gpu2: 93375MB  gpu3: 93375MB]
+TP=TP4_longbench  ctx= 9895  |  prompt= 9895tok  output=256tok  |  TTFT= 1077.7ms  prefill= 1067.8ms (    9266 tok/s)  decode=   101.2 tok/s (TPOT=  9.88ms)  total=    3598ms  |  avg_mem=  93375MB  [gpu0: 93375MB  gpu1: 93375MB  gpu2: 93375MB  gpu3: 93375MB]
+TP=TP4_longbench  ctx= 8145  |  prompt= 8145tok  output=256tok  |  TTFT=  906.6ms  prefill=  896.8ms (    9083 tok/s)  decode=   101.5 tok/s (TPOT=  9.86ms)  total=    3419ms  |  avg_mem=  93375MB  [gpu0: 93375MB  gpu1: 93375MB  gpu2: 93375MB  gpu3: 93375MB]
+TP=TP4_longbench  ctx=11221  |  prompt=11221tok  output=256tok  |  TTFT= 1222.3ms  prefill= 1212.4ms (    9255 tok/s)  decode=   101.4 tok/s (TPOT=  9.87ms)  total=    3737ms  |  avg_mem=  93375MB  [gpu0: 93375MB  gpu1: 93375MB  gpu2: 93375MB  gpu3: 93375MB]
+TP=TP4_longbench  ctx=12320  |  prompt=12320tok  output=256tok  |  TTFT= 1341.6ms  prefill= 1331.8ms (    9251 tok/s)  decode=   101.5 tok/s (TPOT=  9.85ms)  total=    3852ms  |  avg_mem=  93375MB  [gpu0: 93375MB  gpu1: 93375MB  gpu2: 93375MB  gpu3: 93375MB]
+TP=TP4_longbench  ctx=12794  |  prompt=12794tok  output=256tok  |  TTFT= 1385.9ms  prefill= 1376.0ms (    9298 tok/s)  decode=   101.5 tok/s (TPOT=  9.85ms)  total=    3896ms  |  avg_mem=  93375MB  [gpu0: 93375MB  gpu1: 93375MB  gpu2: 93375MB  gpu3: 93375MB]
+TP=TP4_longbench  ctx=15476  |  prompt=15476tok  output=256tok  |  TTFT= 1675.4ms  prefill= 1665.5ms (    9292 tok/s)  decode=   101.3 tok/s (TPOT=  9.87ms)  total=    4191ms  |  avg_mem=  93375MB  [gpu0: 93375MB  gpu1: 93375MB  gpu2: 93375MB  gpu3: 93375MB]
+TP=TP4_longbench  ctx= 5930  |  prompt= 5930tok  output=256tok  |  TTFT=  684.0ms  prefill=  674.1ms (    8797 tok/s)  decode=   101.5 tok/s (TPOT=  9.85ms)  total=    3197ms  |  avg_mem=  93375MB  [gpu0: 93375MB  gpu1: 93375MB  gpu2: 93375MB  gpu3: 93375MB]
+TP=TP4_longbench  ctx= 5392  |  prompt= 5392tok  output=256tok  |  TTFT=  633.0ms  prefill=  623.1ms (    8653 tok/s)  decode=   101.5 tok/s (TPOT=  9.86ms)  total=    3146ms  |  avg_mem=  93375MB  [gpu0: 93375MB  gpu1: 93375MB  gpu2: 93375MB  gpu3: 93375MB]
+TP=TP4_longbench  ctx=18528  |  prompt=18528tok  output=256tok  |  TTFT= 2092.9ms  prefill= 2083.0ms (    8895 tok/s)  decode=   100.9 tok/s (TPOT=  9.91ms)  total=    4620ms  |  avg_mem=  93375MB  [gpu0: 93375MB  gpu1: 93375MB  gpu2: 93375MB  gpu3: 93375MB]
+TP=TP4_longbench  ctx=10075  |  prompt=10075tok  output=256tok  |  TTFT=   88.9ms  prefill=   79.0ms (  127443 tok/s)  decode=   101.4 tok/s (TPOT=  9.86ms)  total=    2604ms  |  avg_mem=  93375MB  [gpu0: 93375MB  gpu1: 93375MB  gpu2: 93375MB  gpu3: 93375MB]
+TP=TP4_longbench  ctx=12921  |  prompt=12921tok  output=256tok  |  TTFT= 1402.7ms  prefill= 1392.9ms (    9276 tok/s)  decode=   101.6 tok/s (TPOT=  9.84ms)  total=    3912ms  |  avg_mem=  93375MB  [gpu0: 93375MB  gpu1: 93375MB  gpu2: 93375MB  gpu3: 93375MB]
+TP=TP4_longbench  ctx= 6617  |  prompt= 6617tok  output=256tok  |  TTFT=  753.0ms  prefill=  743.2ms (    8903 tok/s)  decode=   101.8 tok/s (TPOT=  9.82ms)  total=    3257ms  |  avg_mem=  93375MB  [gpu0: 93375MB  gpu1: 93375MB  gpu2: 93375MB  gpu3: 93375MB]
+
+==============================================================================================================
+TP=4 VS TP=8 对比
+==============================================================================================================
+   ctx |                                       —— TP={t} ——
+       |  ttft_ms prefill_t/s decode_t/s  TPOT_ms avg_mem_mb
+--------------------------------------------------------------
+  2047 |    492.1       4245      101.1     9.89      93373
+  2693 |    361.7       7655      101.0     9.90      93371
+  2710 |     72.2      43499      101.2     9.88      93371
+  2939 |    385.0       7835      100.7     9.93      93373
+  2987 |    388.6       7888      100.9     9.91      93373
+  3102 |    409.7       7758      101.2     9.89      93373
+  3272 |    422.4       7932      100.8     9.92      93373
+  3362 |    435.1       7907      100.9     9.91      93373
+  3644 |    460.5       8088      100.8     9.92      93373
+  3831 |    474.4       8248      100.7     9.93      93373
+  3926 |    482.9       8299      101.1     9.89      93373
+  4145 |    506.3       8351      100.7     9.93      93373
+  4181 |     77.7      61722      100.7     9.93      93373
+  4271 |    520.9       8359      100.7     9.93      93373
+  4857 |    569.0       8688      101.2     9.88      93371
+  5052 |    604.6       8495      100.8     9.92      93373
+  5061 |    603.0       8534      100.8     9.92      93373
+  5141 |    612.4       8533      100.8     9.92      93373
+  5392 |    633.0       8653      101.5     9.86      93375
+  5423 |    639.9       8608      100.8     9.92      93373
+  5456 |    645.1       8589      101.0     9.91      93371
+  5762 |    674.4       8672      101.1     9.89      93373
+  5795 |    674.5       8719      101.2     9.88      93373
+  5930 |    684.0       8797      101.5     9.85      93375
+  6262 |    726.2       8742      100.9     9.91      93373
+  6359 |    732.6       8799      101.1     9.89      93373
+  6384 |    735.0       8805      101.0     9.90      93373
+  6583 |     81.6      91735      101.2     9.88      93373
+  6617 |    753.0       8903      101.8     9.82      93375
+  7717 |    868.5       8988      100.8     9.92      93373
+  7752 |    873.8       8973      101.0     9.90      93373
+  7894 |    887.6       8994      100.9     9.91      93371
+  8145 |    906.6       9083      101.5     9.86      93375
+  8154 |    912.5       9034      101.0     9.90      93373
+  8590 |    951.9       9119      100.9     9.91      93373
+  8906 |     87.7     114520      101.2     9.88      93371
+  8907 |    986.9       9116      100.8     9.93      93371
+  9895 |   1077.7       9266      101.2     9.88      93375
+ 10074 |   1115.0       9116      101.3     9.87      93375
+ 10075 |     88.9     127443      101.4     9.86      93375
+ 10344 |   1145.0       9113      100.7     9.93      93373
+ 10432 |   1152.5       9130      101.0     9.90      93373
+ 11177 |   1222.5       9218      100.8     9.92      93371
+ 11212 |   1225.5       9224      100.2     9.98      93371
+ 11221 |   1222.3       9255      101.4     9.87      93375
+ 11381 |   1250.5       9174      100.9     9.91      93373
+ 12187 |   1327.5       9249      100.7     9.93      93373
+ 12320 |   1341.6       9251      101.5     9.85      93375
+ 12693 |   1382.9       9244      101.6     9.84      93375
+ 12794 |   1385.9       9298      101.5     9.85      93375
+ 12921 |   1402.7       9276      101.6     9.84      93375
+ 13394 |   1456.7       9258      101.0     9.90      93373
+ 13401 |   1452.0       9293      100.1     9.99      93371
+ 15449 |   1679.7       9252      101.1     9.89      93373
+ 15476 |   1675.4       9292      101.3     9.87      93375
+ 16662 |   1837.9       9115      100.8     9.92      93373
+ 17230 |   2149.4       8053      100.8     9.92      93373
+ 17352 |   1968.9       8858      100.6     9.94      93373
+ 17694 |   2186.7       8129      100.0    10.00      93373
+ 18528 |   2092.9       8895      100.9     9.91      93375
+ 19358 |   2176.7       8934      100.8     9.92      93373
+ 20868 |   2347.4       8928      100.2     9.98      93373
+ 25275 |   2827.2       8972      100.7     9.93      93373
+ 29915 |   3341.7       8979      100.6     9.94      93373
+ 31202 |    140.5     239178       99.9    10.01      92843
+ 31798 |   3548.9       8985      100.1     9.99      92843
+ 31984 |    139.3     247410      100.0    10.00      93371
+ 31990 |   3578.3       8965      100.0    10.00      92843
+ 38008 |    156.7     259173      100.0    10.00      93371
+ 38010 |   4366.2       8726       99.4    10.06      93371
+ 43433 |   5013.0       8682      100.0    10.00      93373
+ 48283 |    172.4     297277      100.3     9.97      93371
+ 48284 |   5553.5       8710       99.8    10.02      93371
+ 48287 |    174.1     294196      100.3     9.97      93371
+ 61465 |    208.0     310469       99.5    10.05      93371
+ 61467 |    197.4     328107       99.8    10.02      93371
+ 61470 |   7311.6       8419       99.5    10.05      93371
+
+==============================================================================================================
+FILES IN THIS RUN
+  tpTP4_longbench.csv      — TP4_longbench 详细结果
+  full_results.json — 全部结果 (含元数据)
+  report.txt       — 本文件

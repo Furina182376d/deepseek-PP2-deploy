@@ -9,7 +9,7 @@ needle-in-a-haystack parameters for long-context throughput testing.
 # Downloaded from ModelScope: ZhipuAI/LongBench-v2
 # Or HuggingFace: THUDM/LongBench
 LONGBENCH_DATASETS = [
-    "narrative_qa",      # QA,      avg 31K tokens, EN
+    "narrativeqa",       # QA,      avg 31K tokens, EN
     "qasper",            # QA,      avg  4K tokens, EN
     "gov_report",        # Summ,    avg  9K tokens, EN
     "qmsum",             # Summ,    avg 14K tokens, EN
@@ -19,7 +19,12 @@ LONGBENCH_DATASETS = [
 ]
 
 # Local path(s) to search for pre-downloaded datasets
+import os
+
+_PROJ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 LONGBENCH_DATA_DIRS = [
+    os.path.join(_PROJ, "data"),
     "/data/benchmarks/longbench",
     "/data/benchmarks/LongBench",
     "/data/benchmarks",
