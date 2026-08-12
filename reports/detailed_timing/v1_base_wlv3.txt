@@ -1,0 +1,199 @@
+DeepSeek V4 Flash — Detailed Per-Phase Timing Report
+Timestamp : 20260812_231627
+Model     : /data/model/DeepSeek-V4-Flash-0731
+Config    : PP=1  TP=4  |  Max Len: 65536
+Output Len: 256 tokens (ignore_eos=True)
+
+==========================================================================================
+PHASE LEGEND
+==========================================================================================
+  ① Queue wait   : queued_ts → scheduled_ts (scheduler slot wait; near-zero offline)
+  ② Prefill      : scheduled_ts → first_token_ts, minus 1 decode step
+                   (process all prompt tokens → produce first token)
+  ③ Decode       : first_token_ts → last_token_ts
+                   (autoregressive generation, one step per token)
+  ④ Overhead     : Python wall-clock − (prefill+first_decode + decode)
+
+  NOTE: ②③ timestamps are engine-core monotonic; ④ bridges to Python wall-clock.
+
+==========================================================================================
+SYNTHETIC PROMPTS — controlled context lengths
+==========================================================================================
+  ctx=  1024  (synth_1024)
+    prompt=   660 tok  output= 256 tok  wall= 2572.8ms  (TTFT=   66.0ms)
+      ① Queue wait :     0.01 ms  (  0.0%)
+      ② Prefill    :    53.09 ms  (  2.1%)     12433 tok/s
+      ③ Decode     :  2506.06 ms  ( 97.4%)   101.8 tok/s  (TPOT= 9.83ms)
+      ④ Overhead   :     3.87 ms  (  0.2%)
+
+  ctx=  2048  (synth_2048)
+    prompt=  1328 tok  output= 256 tok  wall= 2576.3ms  (TTFT=   67.5ms)
+      ① Queue wait :     0.01 ms  (  0.0%)
+      ② Prefill    :    52.87 ms  (  2.1%)     25116 tok/s
+      ③ Decode     :  2508.11 ms  ( 97.4%)   101.7 tok/s  (TPOT= 9.84ms)
+      ④ Overhead   :     5.50 ms  (  0.2%)
+
+  ctx=  4096  (synth_4096)
+    prompt=  2655 tok  output= 256 tok  wall= 2602.1ms  (TTFT=   71.7ms)
+      ① Queue wait :     0.01 ms  (  0.0%)
+      ② Prefill    :    53.54 ms  (  2.1%)     49588 tok/s
+      ③ Decode     :  2529.91 ms  ( 97.2%)   100.8 tok/s  (TPOT= 9.92ms)
+      ④ Overhead   :     8.74 ms  (  0.3%)
+
+  ctx=  8192  (synth_8192)
+    prompt=  5312 tok  output= 256 tok  wall= 2610.9ms  (TTFT=   78.1ms)
+      ① Queue wait :     0.01 ms  (  0.0%)
+      ② Prefill    :    53.91 ms  (  2.1%)     98538 tok/s
+      ③ Decode     :  2532.07 ms  ( 97.0%)   100.7 tok/s  (TPOT= 9.93ms)
+      ④ Overhead   :    14.98 ms  (  0.6%)
+
+  ctx= 12288  (synth_12288)
+    prompt=  7973 tok  output= 256 tok  wall= 2611.8ms  (TTFT=   83.4ms)
+      ① Queue wait :     0.01 ms  (  0.0%)
+      ② Prefill    :    53.44 ms  (  2.0%)    149188 tok/s
+      ③ Decode     :  2527.79 ms  ( 96.8%)   100.9 tok/s  (TPOT= 9.91ms)
+      ④ Overhead   :    20.61 ms  (  0.8%)
+
+  ctx= 16384  (synth_16384)
+    prompt= 10626 tok  output= 256 tok  wall= 2629.8ms  (TTFT=   93.3ms)
+      ① Queue wait :     0.01 ms  (  0.0%)
+      ② Prefill    :    55.21 ms  (  2.1%)    192464 tok/s
+      ③ Decode     :  2536.06 ms  ( 96.4%)   100.5 tok/s  (TPOT= 9.95ms)
+      ④ Overhead   :    28.64 ms  (  1.1%)
+
+  ctx= 24576  (synth_24576)
+    prompt= 15946 tok  output= 256 tok  wall= 2641.3ms  (TTFT=  104.1ms)
+      ① Queue wait :     0.01 ms  (  0.0%)
+      ② Prefill    :    55.36 ms  (  2.1%)    288026 tok/s
+      ③ Decode     :  2536.69 ms  ( 96.0%)   100.5 tok/s  (TPOT= 9.95ms)
+      ④ Overhead   :    39.35 ms  (  1.5%)
+
+  ctx= 32768  (synth_32768)
+    prompt= 21261 tok  output= 256 tok  wall= 2662.7ms  (TTFT=  112.4ms)
+      ① Queue wait :     0.01 ms  (  0.0%)
+      ② Prefill    :    48.55 ms  (  1.8%)    437880 tok/s
+      ③ Decode     :  2549.82 ms  ( 95.8%)   100.0 tok/s  (TPOT=10.00ms)
+      ④ Overhead   :    54.36 ms  (  2.0%)
+
+  ctx= 49152  (synth_49152)
+    prompt= 31892 tok  output= 256 tok  wall= 2691.5ms  (TTFT=  141.8ms)
+      ① Queue wait :     0.01 ms  (  0.0%)
+      ② Prefill    :    55.32 ms  (  2.1%)    576513 tok/s
+      ③ Decode     :  2549.13 ms  ( 94.7%)   100.0 tok/s  (TPOT=10.00ms)
+      ④ Overhead   :    77.04 ms  (  2.9%)
+
+  ctx= 65536  (synth_65536)
+    prompt= 42521 tok  output= 256 tok  wall= 2732.2ms  (TTFT=  179.3ms)
+      ① Queue wait :     0.01 ms  (  0.0%)
+      ② Prefill    :    60.73 ms  (  2.2%)    700132 tok/s
+      ③ Decode     :  2552.30 ms  ( 93.4%)    99.9 tok/s  (TPOT=10.01ms)
+      ④ Overhead   :   109.11 ms  (  4.0%)
+
+==========================================================================================
+SYNTHETIC SUMMARY TABLE (phase ms / % of wall)
+==========================================================================================
+    ctx |    wall |  prefill      % |   decode      % |   queue | overhead | prefill_t/s | decode_t/s
+--------------------------------------------------------------------------------------------------------------
+   1024 |    2573 |     53.1   2.1% |   2506.1  97.4% |    0.01 |     3.87 |       12433 |      101.8
+   2048 |    2576 |     52.9   2.1% |   2508.1  97.4% |    0.01 |     5.50 |       25116 |      101.7
+   4096 |    2602 |     53.5   2.1% |   2529.9  97.2% |    0.01 |     8.74 |       49588 |      100.8
+   8192 |    2611 |     53.9   2.1% |   2532.1  97.0% |    0.01 |    14.98 |       98538 |      100.7
+  12288 |    2612 |     53.4   2.0% |   2527.8  96.8% |    0.01 |    20.61 |      149188 |      100.9
+  16384 |    2630 |     55.2   2.1% |   2536.1  96.4% |    0.01 |    28.64 |      192464 |      100.5
+  24576 |    2641 |     55.4   2.1% |   2536.7  96.0% |    0.01 |    39.35 |      288026 |      100.5
+  32768 |    2663 |     48.5   1.8% |   2549.8  95.8% |    0.01 |    54.36 |      437880 |      100.0
+  49152 |    2691 |     55.3   2.1% |   2549.1  94.7% |    0.01 |    77.04 |      576513 |      100.0
+  65536 |    2732 |     60.7   2.2% |   2552.3  93.4% |    0.01 |   109.11 |      700132 |       99.9
+
+==========================================================================================
+REAL LONGBENCH SAMPLES
+==========================================================================================
+  gov_report[0]  (ctx=4181)
+    prompt=  4181 tok  output= 256 tok  wall= 2610.4ms  (TTFT=   74.4ms)
+      ① Queue wait :     0.01 ms  (  0.0%)
+      ② Prefill    :    53.32 ms  (  2.0%)     78406 tok/s
+      ③ Decode     :  2535.46 ms  ( 97.1%)   100.6 tok/s  (TPOT= 9.94ms)
+      ④ Overhead   :    11.63 ms  (  0.4%)
+
+  gov_report[1]  (ctx=10344)
+    prompt= 10344 tok  output= 256 tok  wall= 2625.1ms  (TTFT=   91.9ms)
+      ① Queue wait :     0.01 ms  (  0.0%)
+      ② Prefill    :    55.23 ms  (  2.1%)    187282 tok/s
+      ③ Decode     :  2532.69 ms  ( 96.5%)   100.7 tok/s  (TPOT= 9.93ms)
+      ④ Overhead   :    27.24 ms  (  1.0%)
+
+  gov_report[2]  (ctx=4145)
+    prompt=  4145 tok  output= 256 tok  wall= 2611.8ms  (TTFT=   76.8ms)
+      ① Queue wait :     0.01 ms  (  0.0%)
+      ② Prefill    :    55.28 ms  (  2.1%)     74984 tok/s
+      ③ Decode     :  2534.49 ms  ( 97.0%)   100.6 tok/s  (TPOT= 9.94ms)
+      ④ Overhead   :    12.07 ms  (  0.5%)
+
+  narrativeqa[0]  (ctx=31202)
+    prompt= 31202 tok  output= 256 tok  wall= 2692.7ms  (TTFT=  143.2ms)
+      ① Queue wait :     0.01 ms  (  0.0%)
+      ② Prefill    :    59.61 ms  (  2.2%)    523404 tok/s
+      ③ Decode     :  2548.98 ms  ( 94.7%)   100.0 tok/s  (TPOT=10.00ms)
+      ④ Overhead   :    74.08 ms  (  2.8%)
+
+  narrativeqa[1]  (ctx=31990)
+    prompt= 31990 tok  output= 256 tok  wall= 2695.9ms  (TTFT=  146.2ms)
+      ① Queue wait :     0.01 ms  (  0.0%)
+      ② Prefill    :    59.43 ms  (  2.2%)    538304 tok/s
+      ③ Decode     :  2549.12 ms  ( 94.6%)   100.0 tok/s  (TPOT=10.00ms)
+      ④ Overhead   :    77.33 ms  (  2.9%)
+
+  narrativeqa[2]  (ctx=31798)
+    prompt= 31798 tok  output= 256 tok  wall= 2682.1ms  (TTFT=  136.2ms)
+      ① Queue wait :     0.01 ms  (  0.0%)
+      ② Prefill    :    54.65 ms  (  2.0%)    581870 tok/s
+      ③ Decode     :  2545.27 ms  ( 94.9%)   100.2 tok/s  (TPOT= 9.98ms)
+      ④ Overhead   :    72.14 ms  (  2.7%)
+
+  qasper[0]  (ctx=2710)
+    prompt=  2710 tok  output= 256 tok  wall= 2598.1ms  (TTFT=   69.9ms)
+      ① Queue wait :     0.01 ms  (  0.0%)
+      ② Prefill    :    50.05 ms  (  1.9%)     54141 tok/s
+      ③ Decode     :  2527.63 ms  ( 97.3%)   100.9 tok/s  (TPOT= 9.91ms)
+      ④ Overhead   :    10.49 ms  (  0.4%)
+
+  qasper[1]  (ctx=2693)
+    prompt=  2693 tok  output= 256 tok  wall= 2594.1ms  (TTFT=   67.8ms)
+      ① Queue wait :     0.01 ms  (  0.0%)
+      ② Prefill    :    49.28 ms  (  1.9%)     54652 tok/s
+      ③ Decode     :  2525.72 ms  ( 97.4%)   101.0 tok/s  (TPOT= 9.90ms)
+      ④ Overhead   :     9.22 ms  (  0.4%)
+
+  qasper[2]  (ctx=5456)
+    prompt=  5456 tok  output= 256 tok  wall= 2609.8ms  (TTFT=   79.6ms)
+      ① Queue wait :     0.01 ms  (  0.0%)
+      ② Prefill    :    50.93 ms  (  2.0%)    107138 tok/s
+      ③ Decode     :  2529.53 ms  ( 96.9%)   100.8 tok/s  (TPOT= 9.92ms)
+      ④ Overhead   :    19.42 ms  (  0.7%)
+
+  qmsum[0]  (ctx=6583)
+    prompt=  6583 tok  output= 256 tok  wall= 2616.6ms  (TTFT=   83.8ms)
+      ① Queue wait :     0.01 ms  (  0.0%)
+      ② Prefill    :    55.02 ms  (  2.1%)    119651 tok/s
+      ③ Decode     :  2532.19 ms  ( 96.8%)   100.7 tok/s  (TPOT= 9.93ms)
+      ④ Overhead   :    19.48 ms  (  0.7%)
+
+  qmsum[1]  (ctx=17230)
+    prompt= 17230 tok  output= 256 tok  wall= 2653.4ms  (TTFT=  106.0ms)
+      ① Queue wait :     0.01 ms  (  0.0%)
+      ② Prefill    :    51.75 ms  (  2.0%)    332915 tok/s
+      ③ Decode     :  2546.80 ms  ( 96.0%)   100.1 tok/s  (TPOT= 9.99ms)
+      ④ Overhead   :    44.88 ms  (  1.7%)
+
+  qmsum[2]  (ctx=19358)
+    prompt= 19358 tok  output= 256 tok  wall= 2656.0ms  (TTFT=  115.0ms)
+      ① Queue wait :     0.01 ms  (  0.0%)
+      ② Prefill    :    56.07 ms  (  2.1%)    345272 tok/s
+      ③ Decode     :  2540.41 ms  ( 95.6%)   100.4 tok/s  (TPOT= 9.96ms)
+      ④ Overhead   :    49.60 ms  (  1.9%)
+
+
+==========================================================================================
+FILES IN THIS RUN
+  detailed_timing.json — 完整逐阶段数据 (metadata + results)
+  report.txt          — 本文件
