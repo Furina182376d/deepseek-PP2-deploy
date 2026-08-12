@@ -169,11 +169,6 @@ def run_real_benchmark(tp: int = 4):
                 ignore_eos=True,
             )
 
-            # Per-sample warmup (CUDA graph / JIT for this shape)
-            if idx == 0:
-                llm.generate([prompt], SamplingParams(temperature=0, max_tokens=1, ignore_eos=True))
-                torch.cuda.synchronize()
-
             r = _timed_generate(llm, prompt, sp)
 
             used, _ = gpu_mem(tp)
