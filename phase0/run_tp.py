@@ -57,6 +57,10 @@ def run_tp(tp: int):
         prompt = make_prompt(ctx_len)
         sp = SamplingParams(temperature=0, max_tokens=config.OUTPUT_LEN, ignore_eos=True)
 
+        # Per-ctx warmup: pay CUDA graph capture / JIT compilation cost before timing
+        llm.generate([prompt], SamplingParams(temperature=0, max_tokens=1, ignore_eos=True))
+        torch.cuda.synchronize()
+
         torch.cuda.synchronize()
         t0 = time.perf_counter()
         outputs = llm.generate([prompt], sp)

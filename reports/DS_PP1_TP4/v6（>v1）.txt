@@ -1,0 +1,50 @@
+DeepSeek V4 Flash — vLLM Profile Report
+Timestamp : 20260812_102729
+Model     : /data/model/DeepSeek-V4-Flash-0731
+Max Len   : 65536  |  GPU util: 0.9  |  KV dtype: fp8
+Output Len: 256 tokens (ignore_eos=True)
+
+
+关键修改：
+不改 LLM 参数，在 benchmark 循环里给每个 ctx 加一次预暖，把 graph capture 提前支付掉
+
+diff：（在run_tp.py）
+    # Per-ctx warmup: pay CUDA graph capture / JIT compilation cost before timing
+    llm.generate([prompt], SamplingParams(temperature=0, max_tokens=1, ignore_eos=True))
+    torch.cuda.synchronize()
+
+逻辑：每个 ctx 先跑一次 max_tokens=1 的预热（触发 graph capture / JIT），
+    然后才跑真正的 max_tokens=256 测量。这样一次性开销不计入计时
+
+
+
+==============================================================================================================
+PER-RUN DETAILS
+==============================================================================================================
+TP=4  ctx=  512  |  prompt=  330tok  output=256tok  |  TTFT=   62.3ms  prefill=   52.4ms (    6296 tok/s)  decode=   101.2 tok/s (TPOT=  9.88ms)  total=    2582ms  |  avg_mem=  89041MB  [gpu0: 89041MB  gpu1: 89041MB  gpu2: 89041MB  gpu3: 89041MB]
+TP=4  ctx= 1024  |  prompt=  660tok  output=256tok  |  TTFT=   63.0ms  prefill=   53.2ms (   12414 tok/s)  decode=   101.2 tok/s (TPOT=  9.88ms)  total=    2583ms  |  avg_mem=  89041MB  [gpu0: 89041MB  gpu1: 89041MB  gpu2: 89041MB  gpu3: 89041MB]
+TP=4  ctx= 2048  |  prompt= 1328tok  output=256tok  |  TTFT=   70.1ms  prefill=   60.2ms (   22056 tok/s)  decode=   101.0 tok/s (TPOT=  9.91ms)  total=    2597ms  |  avg_mem=  89041MB  [gpu0: 89041MB  gpu1: 89041MB  gpu2: 89041MB  gpu3: 89041MB]
+TP=4  ctx= 4096  |  prompt= 2655tok  output=256tok  |  TTFT=   74.3ms  prefill=   64.3ms (   41300 tok/s)  decode=   100.0 tok/s (TPOT= 10.00ms)  total=    2625ms  |  avg_mem=  89043MB  [gpu0: 89043MB  gpu1: 89043MB  gpu2: 89043MB  gpu3: 89043MB]
+TP=4  ctx= 8192  |  prompt= 5312tok  output=256tok  |  TTFT=   79.9ms  prefill=   69.9ms (   76019 tok/s)  decode=   100.0 tok/s (TPOT= 10.00ms)  total=    2630ms  |  avg_mem=  89043MB  [gpu0: 89043MB  gpu1: 89043MB  gpu2: 89043MB  gpu3: 89043MB]
+TP=4  ctx=16384  |  prompt=10626tok  output=256tok  |  TTFT=   95.3ms  prefill=   85.3ms (  124537 tok/s)  decode=   100.0 tok/s (TPOT= 10.00ms)  total=    2646ms  |  avg_mem=  89045MB  [gpu0: 89045MB  gpu1: 89045MB  gpu2: 89045MB  gpu3: 89045MB]
+TP=4  ctx=32768  |  prompt=21261tok  output=256tok  |  TTFT=  119.8ms  prefill=  109.8ms (  193684 tok/s)  decode=    99.7 tok/s (TPOT= 10.03ms)  total=    2678ms  |  avg_mem=  90393MB  [gpu0: 90393MB  gpu1: 90393MB  gpu2: 90393MB  gpu3: 90393MB]
+
+==============================================================================================================
+TP=4 VS TP=8 对比
+==============================================================================================================
+   ctx |                                       —— TP={t} ——
+       |  ttft_ms prefill_t/s decode_t/s  TPOT_ms avg_mem_mb
+--------------------------------------------------------------
+   512 |     62.3       6296      101.2     9.88      89041
+  1024 |     63.0      12414      101.2     9.88      89041
+  2048 |     70.1      22056      101.0     9.91      89041
+  4096 |     74.3      41300      100.0    10.00      89043
+  8192 |     79.9      76019      100.0    10.00      89043
+ 16384 |     95.3     124537      100.0    10.00      89045
+ 32768 |    119.8     193684       99.7    10.03      90393
+
+==============================================================================================================
+FILES IN THIS RUN
+  tp4.csv      — 4 详细结果
+  full_results.json — 全部结果 (含元数据)
+  report.txt       — 本文件
