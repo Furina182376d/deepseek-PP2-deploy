@@ -11,6 +11,7 @@ import gc
 import json
 import os
 import sys
+import time
 
 import torch
 from vllm import SamplingParams
@@ -26,18 +27,31 @@ from phase0.results_utils import (
     ALL_RESULTS,
     RESULTS_DIR,
     TIMESTAMP,
+    write_aggregate_summary,
     write_report_and_summary,
 )
 from phase2.data_loader import list_available_datasets, load_longbench
 
 # ---- Knobs ----
 OUTPUT_LEN = 256
-MAX_SAMPLES = 20
+# Samples per dataset; None = all.  Override via LONGBENCH_MAX_SAMPLES env.
+MAX_SAMPLES = (
+    int(os.environ["LONGBENCH_MAX_SAMPLES"])
+    if "LONGBENCH_MAX_SAMPLES" in os.environ
+    else 20
+)
 
 
 def iter_longbench_prompts(tokenizer):
-    """Yield {"label": task, "prompt": text, "task": task} for every
-    valid LongBench sample."""
+    """Yield {"label": task, "prompt": text, "prompt_token_ids": ids,
+    "tokenize_ms": ms, "task": task} for every valid LongBench sample.
+
+    Tokenizes ONCE here (the encode is needed for the length check
+    anyway) and reuses the ids for both the per-sample warmup and the
+    timed generation — Python-side tokenization never enters the timed
+    path (same finding as profile_detailed_timing: ~2ms/K was hidden in
+    TTFT/wall when passing text).
+    """
     max_prompt_len = config.MAX_MODEL_LEN - OUTPUT_LEN
     available = list_available_datasets()
     tasks = [name for name, status in available.items() if status == "local"]
@@ -48,11 +62,21 @@ def iter_longbench_prompts(tokenizer):
             question = item.get("input", "") or item.get("question", "")
             prompt_text = f"{context}\n\n{question}"
 
+            t0 = time.perf_counter()
+            ids = tokenizer.encode(prompt_text)
+            tokenize_ms = (time.perf_counter() - t0) * 1000
+
             # Skip samples that exceed max model length
-            if len(tokenizer.encode(prompt_text)) > max_prompt_len:
+            if len(ids) > max_prompt_len:
                 continue
 
-            yield {"label": task_name, "prompt": prompt_text, "task": task_name}
+            yield {
+                "label": task_name,
+                "prompt": prompt_text,
+                "prompt_token_ids": ids,
+                "tokenize_ms": tokenize_ms,
+                "task": task_name,
+            }
 
 
 if __name__ == "__main__":
@@ -99,9 +123,11 @@ if __name__ == "__main__":
         "output_len": OUTPUT_LEN,
         "max_samples_per_dataset": MAX_SAMPLES,
         "datasets": tasks,
+        "pre_tokenized": True,
     }
     json_path = os.path.join(RESULTS_DIR, "full_results.json")
     with open(json_path, "w") as f:
         json.dump({"metadata": metadata, "results": ALL_RESULTS}, f, indent=2)
 
     write_report_and_summary()
+    write_aggregate_summary()

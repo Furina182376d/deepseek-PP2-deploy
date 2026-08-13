@@ -65,16 +65,26 @@ def _print_gpu_mem(tp: int):
               f"({used_init[i]/total_init[i]*100:.1f}%)")
 
 
-def _timed_generate(llm: LLM, prompt: str, sp: SamplingParams) -> dict:
+def _timed_generate(llm: LLM, prompt, sp: SamplingParams,
+                    tokenize_ms: float = 0.0) -> dict:
     """Single generate call with wall-clock + vLLM per-request metrics.
+
+    ``prompt`` may be a str (tokenized inside llm.generate, included in
+    wall) or a pre-tokenized list[int] (passed as prompt_token_ids, so
+    tokenization stays OUTSIDE the timed path — matching the detailed
+    timing benchmark's phase ⑤).
 
     Returns a dict with keys:
         prompt_tok, out_tok, total_ms, ttft_ms, tpot_ms,
-        decode_tps, prefill_ms, prefill_tps
+        decode_tps, prefill_ms, prefill_tps,
+        queue_wait_ms, overhead_ms, tokenize_ms
     """
+    prompt_inputs = (
+        [{"prompt_token_ids": prompt}] if isinstance(prompt, list) else [prompt]
+    )
     torch.cuda.synchronize()
     t0 = time.perf_counter()
-    outputs = llm.generate([prompt], sp)
+    outputs = llm.generate(prompt_inputs, sp)
     torch.cuda.synchronize()
     t1 = time.perf_counter()
 
@@ -95,22 +105,38 @@ def _timed_generate(llm: LLM, prompt: str, sp: SamplingParams) -> dict:
         first_decode_ms = tpot_ms
         prefill_ms = max(0.0, ttft_ms - first_decode_ms)
         prefill_tps = prompt_tok / (prefill_ms / 1000) if prefill_ms > 0 else 0.0
+        queue_wait_ms = (
+            (m.scheduled_ts - m.queued_ts) * 1000
+            if m.queued_ts and m.scheduled_ts
+            else 0.0
+        )
     else:
         ttft_ms = 0.0
         tpot_ms = 0.0
         decode_tps = 0.0
         prefill_ms = 0.0
         prefill_tps = 0.0
+        queue_wait_ms = 0.0
+
+    total_ms = (t1 - t0) * 1000
+    # Python-side overhead = wall − (TTFT + remaining decode steps).
+    # With pre-tokenized ids this is the ~constant engine handoff cost;
+    # with text input it also swallows frontend tokenization.
+    decode_ms = max(0, out_tok - 1) * tpot_ms
+    overhead_ms = max(0.0, total_ms - ttft_ms - decode_ms)
 
     return {
         "prompt_tok": prompt_tok,
         "out_tok": out_tok,
-        "total_ms": (t1 - t0) * 1000,
+        "total_ms": total_ms,
         "ttft_ms": ttft_ms,
         "tpot_ms": tpot_ms,
         "decode_tps": decode_tps,
         "prefill_ms": prefill_ms,
         "prefill_tps": prefill_tps,
+        "queue_wait_ms": queue_wait_ms,
+        "overhead_ms": overhead_ms,
+        "tokenize_ms": tokenize_ms,
     }
 
 
@@ -136,8 +162,11 @@ def run_prompt_benchmark(
         Pre-loaded vLLM ``LLM`` instance.
     prompts:
         Iterable of dicts. Each dict must have ``"label"`` (str, shown in
-        terminal output) and ``"prompt"`` (str, the input text).  Extra keys
-        matching ``extra_fields`` are forwarded to the CSV row.
+        terminal output) and either ``"prompt"`` (str, the input text) or
+        ``"prompt_token_ids"`` (list[int], pre-tokenized — tokenization
+        stays outside the timed path; optional ``"tokenize_ms"`` records
+        how long that pre-tokenization took).  Extra keys matching
+        ``extra_fields`` are forwarded to the CSV row.
     tp:
         Tensor-parallelism count (used for GPU-memory columns).
     tag:
@@ -163,16 +192,17 @@ def run_prompt_benchmark(
     header = (
         f"\n{'label':>20s} {'ctx':>6s} {'out':>4s} | "
         f"{'TTFT_ms':>8s} | {'prefill_t/s':>10s} | {'decode_t/s':>10s} | "
-        f"{'total_ms':>8s} | {'GPU_avg_MB':>10s}"
+        f"{'total_ms':>8s} | {'tok_ms':>7s} | {'ovh_ms':>7s} | {'GPU_avg_MB':>10s}"
     )
     print(header)
-    print("-" * 95)
+    print("-" * 110)
 
     results: list[dict] = []
 
     for p in prompts:
-        prompt_text = p["prompt"]
+        prompt = p.get("prompt_token_ids") or p["prompt"]
         label = p["label"]
+        tokenize_ms = p.get("tokenize_ms", 0.0)
 
         sp = SamplingParams(
             temperature=0,
@@ -181,10 +211,15 @@ def run_prompt_benchmark(
         )
 
         if warmup_per_sample:
-            llm.generate([prompt_text], SamplingParams(temperature=0, max_tokens=1, ignore_eos=True))
+            warmup_inputs = (
+                [{"prompt_token_ids": prompt}]
+                if isinstance(prompt, list)
+                else [prompt]
+            )
+            llm.generate(warmup_inputs, SamplingParams(temperature=0, max_tokens=1, ignore_eos=True))
             torch.cuda.synchronize()
 
-        r = _timed_generate(llm, prompt_text, sp)
+        r = _timed_generate(llm, prompt, sp, tokenize_ms=tokenize_ms)
 
         used, _ = gpu_mem(tp)
         avg_mem = sum(used) / len(used)
@@ -200,6 +235,9 @@ def run_prompt_benchmark(
             "decode_tps": round(r["decode_tps"], 1),
             "tpot_ms": round(r["tpot_ms"], 2),
             "total_ms": round(r["total_ms"], 1),
+            "tokenize_ms": round(r["tokenize_ms"], 2),
+            "overhead_ms": round(r["overhead_ms"], 2),
+            "queue_wait_ms": round(r["queue_wait_ms"], 2),
             "avg_gpu_mem_mb": round(avg_mem, 1),
         }
         for f in (extra_fields or []):
@@ -215,7 +253,8 @@ def run_prompt_benchmark(
         print(
             f"{label:>20s} {r['prompt_tok']:>6d} {r['out_tok']:>4d} | "
             f"{r['ttft_ms']:>8.1f} | {r['prefill_tps']:>10.0f} | "
-            f"{r['decode_tps']:>10.1f} | {r['total_ms']:>8.0f} | {avg_mem:>10.0f}"
+            f"{r['decode_tps']:>10.1f} | {r['total_ms']:>8.0f} | "
+            f"{r['tokenize_ms']:>7.1f} | {r['overhead_ms']:>7.1f} | {avg_mem:>10.0f}"
         )
 
     close_csv()

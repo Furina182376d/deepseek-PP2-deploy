@@ -38,6 +38,7 @@ def csv_headers(tp: int, extra_fields: list[str] | None = None) -> list[str]:
     cols = [
         "tp", "context_length", "prompt_tokens", "output_tokens",
         "ttft_ms", "prefill_ms", "prefill_tps", "decode_tps", "tpot_ms", "total_ms",
+        "tokenize_ms", "overhead_ms", "queue_wait_ms",
         "avg_gpu_mem_mb",
     ]
     if extra_fields:
@@ -173,3 +174,61 @@ def write_report_and_summary(title: str = "TP=4 vs TP=8 对比"):
     csv_files = "  ".join(f"tp{tp}.csv" for tp in tps)
     print(f"\nResults saved to: {RESULTS_DIR}/")
     print(f"  {csv_files}  full_results.json  report.txt")
+
+
+def write_aggregate_summary(title: str = "WORKLOAD AGGREGATES"):
+    """Aggregate per-phase totals over ALL_RESULTS — for long workloads
+    where the per-ctx grid of write_report_and_summary is meaningless.
+
+    Prints a console block and appends a section to report.txt.  Call
+    AFTER write_report_and_summary so the section lands at the end.
+    """
+    if not ALL_RESULTS:
+        return
+
+    n = len(ALL_RESULTS)
+    total_prompt_tok = sum(r["prompt_tokens"] for r in ALL_RESULTS)
+    total_out_tok = sum(r["output_tokens"] for r in ALL_RESULTS)
+    wall_ms = sum(r["total_ms"] for r in ALL_RESULTS)
+    # Engine-core estimate: TTFT + remaining decode steps per sample.
+    engine_ms = sum(
+        r["ttft_ms"] + max(0, r["output_tokens"] - 1) * r["tpot_ms"]
+        for r in ALL_RESULTS
+    )
+    tokenize_ms = sum(r.get("tokenize_ms", 0.0) for r in ALL_RESULTS)
+    overhead_ms = sum(r.get("overhead_ms", 0.0) for r in ALL_RESULTS)
+    queue_ms = sum(r.get("queue_wait_ms", 0.0) for r in ALL_RESULTS)
+
+    mean_ttft = sum(r["ttft_ms"] for r in ALL_RESULTS) / n
+    mean_tpot = sum(r["tpot_ms"] for r in ALL_RESULTS) / n
+    mean_prefill_tps = sum(r["prefill_tps"] for r in ALL_RESULTS) / n
+    mean_decode_tps = sum(r["decode_tps"] for r in ALL_RESULTS) / n
+
+    def pct(v_ms):
+        return v_ms / wall_ms * 100 if wall_ms > 0 else 0.0
+
+    lines = []
+    lines.append("=" * 110)
+    lines.append(title.upper())
+    lines.append("=" * 110)
+    lines.append(f"  Samples         : {n}")
+    lines.append(f"  Prompt tokens   : {total_prompt_tok:,}")
+    lines.append(f"  Output tokens   : {total_out_tok:,}")
+    lines.append("-" * 110)
+    lines.append(f"  Wall total      : {wall_ms:>12,.0f} ms  ({pct(wall_ms):5.1f}%)")
+    lines.append(f"  Engine est      : {engine_ms:>12,.0f} ms  ({pct(engine_ms):5.1f}%)  TTFT + decode")
+    lines.append(f"  Tokenize        : {tokenize_ms:>12,.0f} ms  ({pct(tokenize_ms):5.1f}%)  pre-timed; wall saved vs text input")
+    lines.append(f"  Overhead        : {overhead_ms:>12,.0f} ms  ({pct(overhead_ms):5.1f}%)  wall − engine")
+    lines.append(f"  Queue wait      : {queue_ms:>12,.0f} ms  ({pct(queue_ms):5.1f}%)")
+    lines.append("-" * 110)
+    lines.append(f"  Mean TTFT       : {mean_ttft:>12.1f} ms")
+    lines.append(f"  Mean TPOT       : {mean_tpot:>12.2f} ms")
+    lines.append(f"  Mean prefill    : {mean_prefill_tps:>12,.0f} tok/s")
+    lines.append(f"  Mean decode     : {mean_decode_tps:>12.1f} tok/s")
+
+    block = "\n".join(lines)
+    print(f"\n\n{block}\n")
+
+    report_path = os.path.join(RESULTS_DIR, "report.txt")
+    with open(report_path, "a") as f:
+        f.write("\n\n" + block + "\n")

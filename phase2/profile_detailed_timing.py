@@ -41,14 +41,29 @@ CONTEXT_LENGTHS = [
 ]
 
 
-def detailed_timing(llm, prompt_text: str, sp: SamplingParams) -> dict:
+def _encode_prompt(tokenizer, text: str):
+    """Tokenize once on the Python side; returns (token_ids, encode_ms).
+
+    Kept OUTSIDE the timed llm.generate path so phase ④ reflects engine
+    handoff only, not frontend tokenization.
+    """
+    t0 = time.perf_counter()
+    ids = tokenizer.encode(text)
+    return ids, (time.perf_counter() - t0) * 1000
+
+
+def detailed_timing(llm, prompt_token_ids, sp: SamplingParams,
+                    tokenize_ms: float = 0.0) -> dict:
     """Single generate + full phase breakdown from vLLM internal timestamps.
+
+    Prompt is passed as pre-tokenized ids — tokenization is measured
+    separately (⑤) and excluded from the timed path.
 
     Returns a dict with every measurable phase in milliseconds.
     """
     torch.cuda.synchronize()
     wall_t0 = time.perf_counter()
-    outputs = llm.generate([prompt_text], sp)
+    outputs = llm.generate([{"prompt_token_ids": prompt_token_ids}], sp)
     torch.cuda.synchronize()
     wall_t1 = time.perf_counter()
 
@@ -63,6 +78,7 @@ def detailed_timing(llm, prompt_text: str, sp: SamplingParams) -> dict:
             "prompt_tok": prompt_tok,
             "out_tok": out_tok,
             "wall_ms": wall_ms,
+            "tokenize_ms": round(tokenize_ms, 2),
             "error": "no vLLM metrics",
         }
 
@@ -139,6 +155,7 @@ def detailed_timing(llm, prompt_text: str, sp: SamplingParams) -> dict:
         "tpot_ms": round(tpot_ms, 2),
         "engine_monotonic_ms": round(engine_monotonic_ms, 2),
         "overhead_ms": round(overhead_ms, 2),
+        "tokenize_ms": round(tokenize_ms, 2),
         # --- Throughputs ---
         "prefill_tps": round(prefill_tps, 1),
         "decode_tps": round(decode_tps, 1),
@@ -175,6 +192,8 @@ def print_phase_breakdown(r: dict, label: str = ""):
          "scheduled→last_token (② includes prefill+1st_decode)"),
         ("④ Python / overhead",            r["overhead_ms"],
          "wall_ms − (prefill_and_fd + decode)"),
+        ("⑤ Tokenize (untimed)",           r.get("tokenize_ms", 0.0),
+         "Python-side encode, excluded from wall"),
     ]
 
     for name, val, note in rows:
@@ -207,6 +226,8 @@ if __name__ == "__main__":
     )
     torch.cuda.synchronize()
 
+    tokenizer = llm.get_tokenizer()
+
     # 3. Synthetic prompts at controlled lengths
     print("\n" + "=" * 70)
     print("  PHASE 1: Synthetic prompts (controlled context lengths)")
@@ -217,9 +238,12 @@ if __name__ == "__main__":
         prompt = make_prompt(ctx_len)
         label = f"synth_{ctx_len}"
 
+        # Pre-tokenize once (outside timed path); reuse ids for warmup + timing
+        prompt_ids, encode_ms = _encode_prompt(tokenizer, prompt)
+
         # Per-sample warmup
         llm.generate(
-            [prompt],
+            [{"prompt_token_ids": prompt_ids}],
             SamplingParams(temperature=0, max_tokens=1, ignore_eos=True),
         )
         torch.cuda.synchronize()
@@ -229,7 +253,7 @@ if __name__ == "__main__":
             max_tokens=OUTPUT_LEN,
             ignore_eos=True,
         )
-        r = detailed_timing(llm, prompt, sp)
+        r = detailed_timing(llm, prompt_ids, sp, tokenize_ms=encode_ms)
         r["context_length"] = ctx_len
         r["label"] = label
         synthetic_results.append(r)
@@ -240,7 +264,6 @@ if __name__ == "__main__":
     print("  PHASE 2: Real LongBench samples")
     print("=" * 70)
 
-    tokenizer = llm.get_tokenizer()
     available = list_available_datasets()
     tasks = [name for name, status in available.items() if status == "local"]
     max_prompt_len = config.MAX_MODEL_LEN - OUTPUT_LEN
@@ -253,14 +276,15 @@ if __name__ == "__main__":
             question = item.get("input", "") or item.get("question", "")
             prompt = f"{context}\n\n{question}"
 
-            if len(tokenizer.encode(prompt)) > max_prompt_len:
+            prompt_ids, encode_ms = _encode_prompt(tokenizer, prompt)
+            if len(prompt_ids) > max_prompt_len:
                 continue
 
             label = f"{task_name}[{idx}]"
 
             # Per-sample warmup
             llm.generate(
-                [prompt],
+                [{"prompt_token_ids": prompt_ids}],
                 SamplingParams(temperature=0, max_tokens=1, ignore_eos=True),
             )
             torch.cuda.synchronize()
@@ -270,7 +294,7 @@ if __name__ == "__main__":
                 max_tokens=OUTPUT_LEN,
                 ignore_eos=True,
             )
-            r = detailed_timing(llm, prompt, sp)
+            r = detailed_timing(llm, prompt_ids, sp, tokenize_ms=encode_ms)
             r["context_length"] = r["prompt_tok"]
             r["label"] = label
             real_results.append(r)
@@ -280,9 +304,9 @@ if __name__ == "__main__":
     print("\n\n" + "=" * 70)
     print("  SUMMARY: Phase time vs context length (synthetic prompts)")
     print("=" * 70)
-    print(f"  {'ctx':>7s} | {'prefill':>9s} {'':>10s} | {'decode':>8s} | {'queue':>8s} | {'overhead':>8s} | {'wall':>8s} | {'prefill':>9s}")
-    print(f"  {'':>7s} | {'ms':>9s} {'tok/s':>10s} | {'ms':>8s} | {'ms':>8s} | {'ms':>8s} | {'ms':>8s} | {'%':>9s}")
-    print(f"  {'─' * 85}")
+    print(f"  {'ctx':>7s} | {'prefill':>9s} {'':>10s} | {'decode':>8s} | {'queue':>8s} | {'tokenize':>9s} | {'overhead':>8s} | {'wall':>8s} | {'prefill':>9s}")
+    print(f"  {'':>7s} | {'ms':>9s} {'tok/s':>10s} | {'ms':>8s} | {'ms':>8s} | {'ms':>9s} | {'ms':>8s} | {'ms':>8s} | {'%':>9s}")
+    print(f"  {'─' * 94}")
 
     for r in synthetic_results:
         wall = r["wall_ms"]
@@ -290,6 +314,7 @@ if __name__ == "__main__":
               f"{r['prefill_ms']:>9.1f} {r['prefill_tps']:>10.0f} | "
               f"{r['decode_ms']:>8.1f} | "
               f"{r['queue_wait_ms']:>8.2f} | "
+              f"{r['tokenize_ms']:>9.2f} | "
               f"{r['overhead_ms']:>8.2f} | "
               f"{wall:>8.0f} | "
               f"{r['prefill_ms']/wall*100:>8.1f}%")
@@ -342,6 +367,8 @@ if __name__ == "__main__":
     lines.append("  ③ Decode       : first_token_ts → last_token_ts")
     lines.append("                   (autoregressive generation, one step per token)")
     lines.append("  ④ Overhead     : Python wall-clock − (prefill+first_decode + decode)")
+    lines.append("  ⑤ Tokenize     : Python-side encode, done BEFORE the timed section")
+    lines.append("                   (prompt passed as token ids; excluded from wall)")
     lines.append("")
     lines.append("  NOTE: ②③ timestamps are engine-core monotonic; ④ bridges to Python wall-clock.")
     lines.append("")
@@ -360,6 +387,7 @@ if __name__ == "__main__":
         out.append(f"{indent}  ③ Decode     : {r['decode_ms']:>8.2f} ms  ({r['decode_ms']/max(wall,1e-9)*100:>5.1f}%)  "
                    f"{r['decode_tps']:>6.1f} tok/s  (TPOT={r['tpot_ms']:>5.2f}ms)")
         out.append(f"{indent}  ④ Overhead   : {r['overhead_ms']:>8.2f} ms  ({r['overhead_ms']/max(wall,1e-9)*100:>5.1f}%)")
+        out.append(f"{indent}  ⑤ Tokenize   : {r.get('tokenize_ms', 0.0):>8.2f} ms  (pre-timed, excluded from wall)")
         return out
 
     lines.append("=" * 90)
@@ -374,16 +402,16 @@ if __name__ == "__main__":
     lines.append("SYNTHETIC SUMMARY TABLE (phase ms / % of wall)")
     lines.append("=" * 90)
     lines.append(f"{'ctx':>7s} | {'wall':>7s} | {'prefill':>8s} {'%':>6s} | "
-                 f"{'decode':>8s} {'%':>6s} | {'queue':>7s} | {'overhead':>8s} | "
+                 f"{'decode':>8s} {'%':>6s} | {'queue':>7s} | {'tokenize':>9s} | {'overhead':>8s} | "
                  f"{'prefill_t/s':>11s} | {'decode_t/s':>10s}")
-    lines.append("-" * 110)
+    lines.append("-" * 120)
     for r in synthetic_results:
         wall = r["wall_ms"]
         lines.append(
             f"{r['context_length']:>7d} | {wall:>7.0f} | "
             f"{r['prefill_ms']:>8.1f} {r['prefill_ms']/max(wall,1e-9)*100:>5.1f}% | "
             f"{r['decode_ms']:>8.1f} {r['decode_ms']/max(wall,1e-9)*100:>5.1f}% | "
-            f"{r['queue_wait_ms']:>7.2f} | {r['overhead_ms']:>8.2f} | "
+            f"{r['queue_wait_ms']:>7.2f} | {r['tokenize_ms']:>9.2f} | {r['overhead_ms']:>8.2f} | "
             f"{r['prefill_tps']:>11.0f} | {r['decode_tps']:>10.1f}"
         )
 
@@ -412,6 +440,7 @@ if __name__ == "__main__":
     print(f"  ② Prefill         : process all prompt tokens → produce first token")
     print(f"  ③ Decode          : autoregressive token generation ({OUTPUT_LEN} tokens)")
     print(f"  ④ Overhead        : Python-side (detokenization, post-processing, clock skew)")
+    print(f"  ⑤ Tokenize        : Python-side encode before timed section (prompt passed as token ids)")
     print(f"\n  NOTE: All internal timestamps are engine-core monotonic. wall_ms is Python wall-clock.")
     print(f"  vLLM-reported TTFT (first_token_latency) is wall-clock, used for cross-check.")
     print(f"\nResults saved to: {out_dir}/")
