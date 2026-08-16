@@ -22,24 +22,38 @@ if _PROJ not in sys.path:
     sys.path.insert(0, _PROJ)
 
 import phase0.config as config
-from phase0.run_tp import _load_model, _print_gpu_mem, run_prompt_benchmark
+from phase0.run_tp import _load_model, _print_gpu_mem, run_batch_benchmark, run_prompt_benchmark
 from phase0.results_utils import (
     ALL_RESULTS,
     RESULTS_DIR,
     TIMESTAMP,
     write_aggregate_summary,
+    write_batch_summary,
     write_report_and_summary,
 )
 from phase2.data_loader import list_available_datasets, load_longbench
 
 # ---- Knobs ----
 OUTPUT_LEN = 256
-# Samples per dataset; None = all.  Override via LONGBENCH_MAX_SAMPLES env.
-MAX_SAMPLES = (
-    int(os.environ["LONGBENCH_MAX_SAMPLES"])
-    if "LONGBENCH_MAX_SAMPLES" in os.environ
-    else 20
-)
+# Samples per dataset; None = all.  Override via LONGBENCH_MAX_SAMPLES env
+# (int, or ""/"all" for every sample in the dataset).
+def _parse_max_samples() -> int | None:
+    v = os.environ.get("LONGBENCH_MAX_SAMPLES", "20")
+    if v == "" or v.lower() == "all":
+        return None
+    return int(v)
+
+
+MAX_SAMPLES = _parse_max_samples()
+# Batch mode: 0 = sequential per-sample timing (legacy default);
+# N > 0 = chunked batch of N per generate call; -1 = all prompts at once.
+BATCH_SIZE = int(os.environ.get("LONGBENCH_BATCH_SIZE", "0"))
+# Parallelism: LONGBENCH_TP (default 4), LONGBENCH_EP (default 0 = 纯 TP;
+# >0 → enable_expert_parallel，vLLM 自动 EP = world//TP).
+LONGBENCH_TP = int(os.environ.get("LONGBENCH_TP", "4"))
+LONGBENCH_EP = int(os.environ.get("LONGBENCH_EP", "0"))
+# SJF-style submission: sort prompts by length before batching.
+SORT_BY_LEN = os.environ.get("LONGBENCH_SORT_BY_LEN") == "1"
 
 
 def iter_longbench_prompts(tokenizer):
@@ -80,11 +94,13 @@ def iter_longbench_prompts(tokenizer):
 
 
 if __name__ == "__main__":
-    tp = 4
-    tag = f"tp{tp}_longbench"
+    tp = LONGBENCH_TP
+    ep_on = LONGBENCH_EP > 0
+    world = tp * LONGBENCH_EP if ep_on else tp
+    tag = f"tp{tp}_longbench" if not ep_on else f"tp{tp}_ep{LONGBENCH_EP}_longbench"
 
-    llm = _load_model(tp)
-    _print_gpu_mem(tp)
+    llm = _load_model(tp, enable_expert_parallel=ep_on)
+    _print_gpu_mem(world)
 
     # Global warmup
     llm.generate(
@@ -96,16 +112,30 @@ if __name__ == "__main__":
     # Collect prompts (need tokenizer for length filtering)
     tokenizer = llm.get_tokenizer()
     prompts = list(iter_longbench_prompts(tokenizer))
+    if SORT_BY_LEN:
+        prompts.sort(key=lambda p: len(p["prompt_token_ids"]))
+        print("Prompts sorted by length (SJF-style submission)")
     print(f"\nLoaded {len(prompts)} valid prompts across datasets")
 
     # Run
-    run_prompt_benchmark(
-        llm, prompts, tp,
-        tag=tag,
-        warmup_per_sample=True,
-        output_len=OUTPUT_LEN,
-        extra_fields=["task"],
-    )
+    batch_stats = None
+    if BATCH_SIZE != 0:
+        tag = f"{tag}_b{BATCH_SIZE}" if BATCH_SIZE > 0 else f"{tag}_ball"
+        _, batch_stats = run_batch_benchmark(
+            llm, prompts, world,
+            tag=tag,
+            batch_size=BATCH_SIZE,
+            output_len=OUTPUT_LEN,
+            extra_fields=["task"],
+        )
+    else:
+        run_prompt_benchmark(
+            llm, prompts, world,
+            tag=tag,
+            warmup_per_sample=True,
+            output_len=OUTPUT_LEN,
+            extra_fields=["task"],
+        )
 
     del llm
     gc.collect()
@@ -124,10 +154,17 @@ if __name__ == "__main__":
         "max_samples_per_dataset": MAX_SAMPLES,
         "datasets": tasks,
         "pre_tokenized": True,
+        "batch_size": BATCH_SIZE,
+        "tp": tp,
+        "expert_parallel": ep_on,
+        "sort_by_len": SORT_BY_LEN,
     }
     json_path = os.path.join(RESULTS_DIR, "full_results.json")
     with open(json_path, "w") as f:
         json.dump({"metadata": metadata, "results": ALL_RESULTS}, f, indent=2)
 
-    write_report_and_summary()
-    write_aggregate_summary()
+    if batch_stats is not None:
+        write_batch_summary(ALL_RESULTS, batch_stats)
+    else:
+        write_report_and_summary()
+        write_aggregate_summary()

@@ -232,3 +232,64 @@ def write_aggregate_summary(title: str = "WORKLOAD AGGREGATES"):
     report_path = os.path.join(RESULTS_DIR, "report.txt")
     with open(report_path, "a") as f:
         f.write("\n\n" + block + "\n")
+
+
+def _percentile(vals, q):
+    """q-th percentile (nearest-rank) of a list; 0.0 if empty."""
+    if not vals:
+        return 0.0
+    s = sorted(vals)
+    idx = min(len(s) - 1, int(round(q / 100 * (len(s) - 1))))
+    return s[idx]
+
+
+def write_batch_summary(rows, stats, title: str = "BATCHED WORKLOAD SUMMARY"):
+    """Summary for batch-mode runs: throughput + per-request latency
+    percentiles.  TTFT here INCLUDES scheduler queue wait (real latency
+    under load).  Prints a console block and appends to report.txt.
+    """
+    if not rows:
+        return
+
+    wall_ms = stats["wall_ms"]
+    wall_s = wall_ms / 1000 if wall_ms > 0 else 0.0
+    n = stats["n_samples"]
+    ttfts = [r["ttft_ms"] for r in rows]
+    lats = [r["total_ms"] for r in rows]
+    queues = [r["queue_wait_ms"] for r in rows]
+    tpots = [r["tpot_ms"] for r in rows]
+
+    # Effective concurrency = Σ per-request engine time / wall — how many
+    # requests the engine actually overlapped on average (≈ achieved batch).
+    concurrency = stats["engine_ms"] / wall_ms if wall_ms > 0 else 0.0
+
+    lines = []
+    lines.append("=" * 110)
+    lines.append(title.upper())
+    lines.append("=" * 110)
+    lines.append(f"  Batch size      : {stats['batch_size']} ({'all at once' if stats['batch_size'] == -1 else 'chunked'})")
+    lines.append(f"  Samples         : {n}")
+    lines.append(f"  Prompt tokens   : {stats['prompt_tokens']:,}")
+    lines.append(f"  Output tokens   : {stats['output_tokens']:,}")
+    lines.append("-" * 110)
+    lines.append(f"  Wall total      : {wall_ms:>12,.0f} ms  ({wall_s:,.1f} s)")
+    lines.append(f"  Throughput      : output {stats['output_tokens'] / wall_s:>9,.1f} tok/s | "
+                 f"prompt {stats['prompt_tokens'] / wall_s:>9,.0f} tok/s")
+    lines.append(f"  Avg concurrency : {concurrency:>12.2f}   (Σ engine time / wall)")
+    lines.append(f"  Engine est      : {stats['engine_ms']:>12,.0f} ms  ({stats['engine_ms'] / wall_ms * 100:5.1f}% of wall)" if wall_ms else f"  Engine est      : {stats['engine_ms']:>12,.0f} ms")
+    lines.append(f"  Queue wait      : {stats['queue_ms']:>12,.0f} ms  ({stats['queue_ms'] / wall_ms * 100:5.1f}% of wall)")
+    lines.append(f"  Tokenize        : {stats['tokenize_ms']:>12,.0f} ms  (pre-timed)")
+    lines.append("-" * 110)
+    lines.append(f"  TTFT (ms)       : mean {sum(ttfts) / n:>7.1f} | "
+                 f"p50 {_percentile(ttfts, 50):>7.1f} | p90 {_percentile(ttfts, 90):>7.1f} | p99 {_percentile(ttfts, 99):>7.1f}")
+    lines.append(f"  Req latency (ms): mean {sum(lats) / n:>7.1f} | "
+                 f"p50 {_percentile(lats, 50):>7.1f} | p90 {_percentile(lats, 90):>7.1f} | p99 {_percentile(lats, 99):>7.1f}")
+    lines.append(f"  TPOT (loaded)   : mean {sum(tpots) / n:>6.2f} ms")
+    lines.append(f"  Queue/req (ms)  : mean {sum(queues) / n:>7.1f}")
+
+    block = "\n".join(lines)
+    print(f"\n\n{block}\n")
+
+    report_path = os.path.join(RESULTS_DIR, "report.txt")
+    with open(report_path, "a") as f:
+        f.write("\n\n" + block + "\n")

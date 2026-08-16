@@ -11,6 +11,7 @@ Public API:
 """
 
 import gc
+import math
 import os
 import sys
 import time
@@ -39,9 +40,16 @@ from phase0.results_utils import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _load_model(tp: int) -> LLM:
-    """Load the model with TP parallelism and return the LLM instance."""
-    print(f"\n{'='*60}\nLoading model TP={tp}, max_model_len={config.MAX_MODEL_LEN}\n{'='*60}")
+def _load_model(tp: int, *, enable_expert_parallel: bool = False) -> LLM:
+    """Load the model with TP parallelism and return the LLM instance.
+
+    ``enable_expert_parallel=True`` switches MoE expert layers to expert
+    parallelism (vLLM 0.26 derives EP size = world_size // TP
+    automatically, e.g. TP=2 on 4 GPUs → EP=2).
+    """
+    print(f"\n{'='*60}\nLoading model TP={tp}"
+          + (" EP=on" if enable_expert_parallel else "")
+          + f", max_model_len={config.MAX_MODEL_LEN}\n{'='*60}")
 
     llm = LLM(
         model=config.MODEL_PATH,
@@ -52,6 +60,7 @@ def _load_model(tp: int) -> LLM:
         kv_cache_dtype=config.KV_CACHE_DTYPE,
         enforce_eager=False,
         disable_log_stats=False,
+        enable_expert_parallel=enable_expert_parallel,
     )
     print("Model loaded.\n")
     return llm
@@ -259,6 +268,149 @@ def run_prompt_benchmark(
 
     close_csv()
     return results
+
+
+# ---------------------------------------------------------------------------
+# Batch benchmark
+# ---------------------------------------------------------------------------
+
+def run_batch_benchmark(
+    llm: LLM,
+    prompts,
+    tp: int,
+    *,
+    tag: str,
+    batch_size: int,
+    output_len: int | None = None,
+    extra_fields: list[str] | None = None,
+):
+    """Chunked batch benchmark — ``batch_size`` prompts per generate call
+    (``batch_size=-1`` submits everything in one call).
+
+    The engine continuous-batches requests within each chunk, so decode
+    runs compute-bound instead of comm-bound at batch=1.  Per-request
+    metrics come from each RequestOutput; TTFT now INCLUDES scheduler
+    queue wait — real per-request latency under load.
+
+    Returns ``(rows, stats)`` — rows are per-request dicts (also appended
+    to ALL_RESULTS and written to CSV; ``total_ms`` here is per-request
+    latency, not wall), stats holds chunk-level wall totals and aggregate
+    token counts for the summary.
+    """
+    output_len = output_len if output_len is not None else config.OUTPUT_LEN
+
+    ensure_results_dir()
+    open_csv(tp=tp, tag=tag, extra_fields=extra_fields)
+
+    sp = SamplingParams(temperature=0, max_tokens=output_len, ignore_eos=True)
+
+    # One batched warmup pass (max_tokens=1) absorbs CUDA-graph capture for
+    # the batch shapes before timing.  warmup_per_sample would serialize the
+    # engine and defeat the point of batching.
+    print(f"\nBatch warmup: {len(prompts)} prompts at once, max_tokens=1 ...")
+    warm_inputs = [p.get("prompt_token_ids") or p["prompt"] for p in prompts]
+    llm.generate(warm_inputs, SamplingParams(temperature=0, max_tokens=1, ignore_eos=True))
+    torch.cuda.synchronize()
+    print("Warmup done.")
+
+    rows: list[dict] = []
+    stats = {
+        "tag": tag,
+        "batch_size": batch_size,
+        "n_samples": len(prompts),
+        "wall_ms": 0.0,
+        "prompt_tokens": 0,
+        "output_tokens": 0,
+        "tokenize_ms": sum(p.get("tokenize_ms", 0.0) for p in prompts),
+        "engine_ms": 0.0,   # Σ (last_token − scheduled) per request
+        "queue_ms": 0.0,
+    }
+
+    n_chunks = 1 if batch_size == -1 else math.ceil(len(prompts) / batch_size)
+    step = len(prompts) if batch_size == -1 else batch_size
+    for ci in range(0, len(prompts), step):
+        chunk = prompts[ci:ci + step]
+        chunk_inputs = [p.get("prompt_token_ids") or p["prompt"] for p in chunk]
+
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        outputs = llm.generate(chunk_inputs, sp)
+        torch.cuda.synchronize()
+        t1 = time.perf_counter()
+        wall_ms = (t1 - t0) * 1000
+        stats["wall_ms"] += wall_ms
+
+        used, _ = gpu_mem(tp)
+        avg_mem = sum(used) / len(used)
+
+        for p, out in zip(chunk, outputs):
+            prompt_tok = len(out.prompt_token_ids)
+            out_tok = len(out.outputs[0].token_ids)
+            stats["prompt_tokens"] += prompt_tok
+            stats["output_tokens"] += out_tok
+
+            m = out.metrics
+            if m and m.first_token_latency is not None:
+                ttft_ms = m.first_token_latency * 1000
+                if m.num_generation_tokens > 1 and m.last_token_ts and m.first_token_ts:
+                    tpot_ms = (
+                        (m.last_token_ts - m.first_token_ts)
+                        / (m.num_generation_tokens - 1) * 1000
+                    )
+                else:
+                    tpot_ms = 0.0
+                queue_wait_ms = (
+                    (m.scheduled_ts - m.queued_ts) * 1000
+                    if m.queued_ts and m.scheduled_ts
+                    else 0.0
+                )
+                engine_ms = (
+                    (m.last_token_ts - m.scheduled_ts) * 1000
+                    if m.last_token_ts and m.scheduled_ts
+                    else 0.0
+                )
+                # Per-request latency under load (TTFT includes queue wait).
+                req_total_ms = ttft_ms + max(0, out_tok - 1) * tpot_ms
+            else:
+                ttft_ms = tpot_ms = queue_wait_ms = engine_ms = req_total_ms = 0.0
+
+            stats["engine_ms"] += engine_ms
+            stats["queue_ms"] += queue_wait_ms
+
+            row = {
+                "tp": tag,
+                "context_length": prompt_tok,
+                "prompt_tokens": prompt_tok,
+                "output_tokens": out_tok,
+                "ttft_ms": round(ttft_ms, 2),
+                "prefill_ms": round(max(0.0, ttft_ms - tpot_ms), 2),
+                "prefill_tps": (
+                    round(prompt_tok / ((ttft_ms - tpot_ms) / 1000), 1)
+                    if ttft_ms > tpot_ms else 0.0
+                ),
+                "decode_tps": round(1000.0 / tpot_ms, 1) if tpot_ms > 0 else 0.0,
+                "tpot_ms": round(tpot_ms, 2),
+                "total_ms": round(req_total_ms, 1),  # per-request latency, not wall
+                "tokenize_ms": round(p.get("tokenize_ms", 0.0), 2),
+                "overhead_ms": 0.0,  # no per-request wall in batch mode
+                "queue_wait_ms": round(queue_wait_ms, 2),
+                "avg_gpu_mem_mb": round(avg_mem, 1),
+            }
+            for f in (extra_fields or []):
+                row[f] = p.get(f, "")
+            for i in range(tp):
+                row[f"gpu{i}_mem_mb"] = used[i]
+
+            rows.append(row)
+            write_csv_row(row)
+            ALL_RESULTS.append(row)
+
+        chunk_out_tok = sum(len(o.outputs[0].token_ids) for o in outputs)
+        print(f"  chunk {ci // step + 1}/{n_chunks}: "
+              f"{len(chunk):>3d} req  wall={wall_ms:>8.0f}ms  out={chunk_out_tok:>5d} tok")
+
+    close_csv()
+    return rows, stats
 
 
 # ---------------------------------------------------------------------------
