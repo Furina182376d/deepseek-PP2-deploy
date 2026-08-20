@@ -1,11 +1,13 @@
 """
-Core PP=2 multi-node inference — one process per GPU, orchestrated by torchrun.
+Core PP multi-node inference — one process per GPU, orchestrated by torchrun.
 
 In external_launcher mode, torchrun launches ``nproc_per_node`` processes on
 each node.  Every process creates its own ``LLM`` instance (one GPU worker)
 and they coordinate via NCCL for TP within a PP stage and P2P for cross-stage
 activations.  All processes call ``llm.generate()`` redundantly — only the
 **leader** (global rank 0) collects and logs results.
+
+当前配置 (config_pp.py): Kimi-K3, PP=3 x TP=8, 三节点 (192.168.0.224/225/226)。
 """
 
 import gc
@@ -86,7 +88,7 @@ def _timed_generate(llm: LLM, prompt: str, sp: SamplingParams, ctx_len: int):
 def run_pp():
     """Main PP profiling entry point — called by every torchrun process."""
 
-    tp_per_pp = cfg.TP_SIZE_PER_PP  # 4
+    tp_per_pp = cfg.TP_SIZE_PER_PP  # 8
 
     if cfg.IS_LEADER:
         print(
@@ -137,6 +139,12 @@ def run_pp():
         node_rank=cfg.NODE_RANK,
         master_addr=cfg.MASTER_ADDR,
         master_port=cfg.MASTER_PORT,
+        # 超时: distributed_timeout_seconds 只管 NCCL 组; gloo (CPU) 组默认
+        # 仅 1800s, 三机权重加载不均衡 >30min 时先加载完的 worker 会在
+        # is_in_the_same_node 的 barrier 上超时崩溃 (Kimi_deploy 已踩坑),
+        # 必须显式加大 cpu_distributed_timeout_seconds
+        distributed_timeout_seconds=10800,
+        cpu_distributed_timeout_seconds=10800,
     )
 
     # ---- All ranks: synchronize after model load ----

@@ -1,23 +1,25 @@
 #!/bin/bash
 # ---------------------------------------------------------------------------
-# Launch PP=2 TP=4 GLM5.2 profiling across TWO nodes via torchrun.
+# Launch PP=3 TP=8 Kimi-K3 profiling across THREE nodes via torchrun.
 #
-# Usage (run on BOTH nodes, with different <node_rank>):
-#   Node 0 (192.168.0.63):  ./launch_pp.sh 0
-#   Node 1 (192.168.0.65):  ./launch_pp.sh 1
+# Usage (run on EACH of the three nodes, with different <node_rank>):
+#   Node 0 (192.168.0.224, aliyun1):  ./launch_pp.sh 0
+#   Node 1 (192.168.0.225, aliyun2):  ./launch_pp.sh 1
+#   Node 2 (192.168.0.226, aliyun3):  ./launch_pp.sh 2
 #
 # Prerequisites:
-#   - Passwordless SSH between the two nodes.
-#   - The ``ds`` conda environment available on both nodes.
+#   - Passwordless SSH between the three nodes.
+#   - The ``vllm`` conda environment (vllm 0.27.1, supports Kimi-K3) on all nodes.
 #   - Identical codebase path on both nodes.
+#   - /data/models/Kimi-K3 present on all three nodes.
 # ---------------------------------------------------------------------------
 set -eo pipefail
 
-NODE_RANK="${1:?Usage: $0 <node_rank (0 or 1)>}"
-MASTER_ADDR="192.168.0.63"
+NODE_RANK="${1:?Usage: $0 <node_rank (0, 1, or 2)>}"
+MASTER_ADDR="192.168.0.224"
 MASTER_PORT=29500
-NNODES=2
-NPROC_PER_NODE=4   # one process per GPU — 4 H20s used per node
+NNODES=3
+NPROC_PER_NODE=8   # one process per GPU — 8 H20s used per node
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONDA_BASE="${HOME}/miniconda3"
@@ -27,7 +29,7 @@ CONDA_BASE="${HOME}/miniconda3"
 # ---------------------------------------------------------------------------
 # shellcheck source=/dev/null
 source "${CONDA_BASE}/etc/profile.d/conda.sh"
-conda activate ds
+conda activate vllm
 
 # ---------------------------------------------------------------------------
 # NCCL settings (from prior working multi-node deployment on these nodes)
@@ -62,18 +64,16 @@ echo "Total procs: $((NNODES * NPROC_PER_NODE))"
 echo "============================================"
 
 # ---- Pre-flight: verify cross-node connectivity ----
-if [ "${NODE_RANK}" = "0" ]; then
-    PEER_IP="192.168.0.65"
-else
-    PEER_IP="192.168.0.63"
-fi
-echo "Checking connectivity to peer node (${PEER_IP})..."
-if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "${PEER_IP}" "echo 'Peer reachable'" 2>/dev/null; then
-    echo "Peer node ${PEER_IP} is reachable."
-else
-    echo "WARNING: Cannot reach peer node ${PEER_IP} via SSH."
-    echo "         Make sure the other node has started launch_pp.sh."
-fi
+for PEER_IP in 192.168.0.224 192.168.0.225 192.168.0.226; do
+    [ "${PEER_IP}" = "$(hostname -I | grep -o "${PEER_IP}" | head -1)" ] && continue
+    echo "Checking connectivity to peer node (${PEER_IP})..."
+    if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "${PEER_IP}" "echo 'Peer reachable'" 2>/dev/null; then
+        echo "Peer node ${PEER_IP} is reachable."
+    else
+        echo "WARNING: Cannot reach peer node ${PEER_IP} via SSH."
+        echo "         Make sure the other node has started launch_pp.sh."
+    fi
+done
 
 torchrun \
     --nnodes="${NNODES}" \

@@ -70,10 +70,15 @@ def close_csv():
         _csv_writer = None
 
 
-def write_report_and_summary(title: str = "TP=4 vs TP=8 对比"):
-    """Print a terminal summary AND write a human-readable report.txt."""
+def write_report_and_summary(title: str = "TP=4 vs TP=8 对比",
+                             metadata: dict | None = None):
+    """Print a terminal summary AND write a human-readable report.txt.
+
+    ``metadata`` (可选) 覆盖报告头部的模型/运行信息; 缺省时回退到 phase0.config。
+    """
     if not ALL_RESULTS:
         return
+    metadata = metadata or {}
 
     ctxs = sorted(set(r["context_length"] for r in ALL_RESULTS))
     tps = sorted(set(r["tp"] for r in ALL_RESULTS))
@@ -106,11 +111,15 @@ def write_report_and_summary(title: str = "TP=4 vs TP=8 对比"):
     # ----- Write report.txt -----
     report_path = os.path.join(RESULTS_DIR, "report.txt")
     lines = []
-    lines.append("DeepSeek V4 Flash — vLLM Profile Report")
-    lines.append(f"Timestamp : {TIMESTAMP}")
-    lines.append(f"Model     : {MODEL_PATH}")
-    lines.append(f"Max Len   : {MAX_MODEL_LEN}  |  GPU util: {GPU_MEM_UTIL}  |  KV dtype: {KV_CACHE_DTYPE}")
-    lines.append(f"Output Len: {OUTPUT_LEN} tokens (ignore_eos=True)")
+    lines.append(f"{title} — vLLM Profile Report")
+    lines.append(f"Timestamp : {metadata.get('timestamp', TIMESTAMP)}")
+    lines.append(f"Model     : {metadata.get('model_path', MODEL_PATH)}")
+    lines.append(
+        f"Max Len   : {metadata.get('max_model_len', MAX_MODEL_LEN)}  |  "
+        f"GPU util: {metadata.get('gpu_memory_utilization', GPU_MEM_UTIL)}  |  "
+        f"KV dtype: {metadata.get('kv_cache_dtype', KV_CACHE_DTYPE)}"
+    )
+    lines.append(f"Output Len: {metadata.get('output_len', OUTPUT_LEN)} tokens (ignore_eos=True)")
     lines.append("")
     lines.append("=" * 110)
     lines.append("PER-RUN DETAILS")
@@ -119,7 +128,10 @@ def write_report_and_summary(title: str = "TP=4 vs TP=8 对比"):
     for r in ALL_RESULTS:
         tp = r["tp"]
         ctx = r["context_length"]
-        gpu_str = "  ".join(f"GPU{i}: {r[f'gpu{i}_mem_mb']:.0f}MB" for i in range(tp))
+        # r["tp"] 是标签字符串 (如 "PP3_TP8"), 不能用于 range;
+        # GPU 数量从行内的 gpu*_mem_mb 列数推导
+        n_gpus = sum(1 for k in r if k.startswith("gpu") and k.endswith("_mem_mb"))
+        gpu_str = "  ".join(f"GPU{i}: {r[f'gpu{i}_mem_mb']:.0f}MB" for i in range(n_gpus))
         lines.append(
             f"TP={tp}  ctx={ctx:>5d}  |  "
             f"prompt={r['prompt_tokens']:>5d}tok  output={r['output_tokens']:>3d}tok  |  "
@@ -150,17 +162,23 @@ def write_report_and_summary(title: str = "TP=4 vs TP=8 对比"):
                 parts.append(f"{'N/A':>50s}")
         lines.append(f"{ctx:>6d} | " + " | ".join(parts))
 
+    def gpu_count(tp_val):
+        r0 = by_key.get((tp_val, ctxs[0])) if ctxs else None
+        if not r0:
+            return 0
+        return sum(1 for k in r0 if k.startswith("gpu") and k.endswith("_mem_mb"))
+
     lines.append("")
     lines.append("=" * 110)
     lines.append("FILES IN THIS RUN")
     for tp_val in tps:
-        lines.append(f"  tp{tp_val}.csv      — {tp_val} 详细结果")
+        lines.append(f"  tp{gpu_count(tp_val)}.csv      — {tp_val} 详细结果")
     lines.append(f"  full_results.json — 全部结果 (含元数据)")
     lines.append(f"  report.txt       — 本文件")
 
     with open(report_path, "w") as f:
         f.write("\n".join(lines) + "\n")
 
-    csv_files = "  ".join(f"tp{tp}.csv" for tp in tps)
+    csv_files = "  ".join(f"tp{gpu_count(t)}.csv" for t in tps)
     print(f"\nResults saved to: {RESULTS_DIR}/")
     print(f"  {csv_files}  full_results.json  report.txt")

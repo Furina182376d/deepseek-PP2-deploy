@@ -1,5 +1,5 @@
 """
-PP=2 multi-node constants for GLM5.2 profiling.
+PP=3 multi-node constants for Kimi-K3 profiling.
 """
 import os
 import sys
@@ -9,25 +9,37 @@ _PROJ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJ not in sys.path:
     sys.path.insert(0, _PROJ)
 
-# Keep a shared reference to the base config for model / cache settings.
+# Keep a shared reference to the base config for generic benchmark settings.
 from phase0.config import (  # noqa: F401 — re-export for convenience
-    CONTEXT_LENGTHS,
     GPU_MEM_UTIL,
-    KV_CACHE_DTYPE,
-    MAX_MODEL_LEN,
     OUTPUT_LEN,
 )
 
-# ---- PP / TP / multi-node ----
-MODEL_PATH = "/data/model/GLM-5.2-FP8"
-PP_SIZE = 2
-TP_SIZE_PER_PP = 4         # each PP stage uses 4 GPUs on the node
-WORLD_SIZE_PP = PP_SIZE * TP_SIZE_PER_PP  # 8 — total workers across both nodes
+# K3 专用: MAX_MODEL_LEN=32768, 32k 的 prompt 会放不下 256 个输出 token,
+# 所以 context 扫描止步 16384 (如需 32768 请把 MAX_MODEL_LEN 提到 65536,
+# 但要注意 KV cache 显存余量)
+CONTEXT_LENGTHS = [512, 1024, 2048, 4096, 8192, 16384]
 
-NNODES = 2
-MASTER_ADDR = "192.168.0.63"
+# ---- 模型 (三台机器均为 /data/models/Kimi-K3) ----
+MODEL_PATH = "/data/models/Kimi-K3"
+
+# ---- PP / TP / multi-node ----
+PP_SIZE = 3
+TP_SIZE_PER_PP = 8         # each PP stage uses 8 GPUs on the node
+WORLD_SIZE_PP = PP_SIZE * TP_SIZE_PER_PP  # 24 — total workers across 3 nodes
+
+NNODES = 3
+# 三机内网: aliyun1=.224 (rank0/master), aliyun2=.225 (rank1), aliyun3=.226 (rank2)
+MASTER_ADDR = "192.168.0.224"
 MASTER_PORT = 29500
 DISTRIBUTED_EXECUTOR_BACKEND = "external_launcher"
+
+# ---- 模型相关 (K3 专用, 覆盖 phase0.config 的 DeepSeek 默认值) ----
+# K3 是 MXFP4 量化 MoE (1.5TB 压缩权重), 每卡 62.5GB 权重; 32k 上下文下
+# KV/激活余量 ~23GB, 保守取 32768
+MAX_MODEL_LEN = 32768
+# KV cache 交给 vllm 自动选择 (K3 MLA 支持 fp8_ds_mla, auto 最稳)
+KV_CACHE_DTYPE = "auto"
 
 # ---- torchrun supplies these via env vars ----
 GLOBAL_RANK = int(os.environ.get("RANK", 0))

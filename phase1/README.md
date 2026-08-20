@@ -1,40 +1,91 @@
-# Phase 1 — PP=2 GLM5.2 两节点部署
+# Phase 1 — PP=3 TP=8 Kimi-K3 三节点部署
 
 ## 阶段目标
 
-在**两个节点**上以 **PP=2（Pipeline Parallelism）+ TP=4** 部署 GLM5.2，
-使用全部 8 张 H20 GPU（每节点 4 卡）：
+在**三个节点**上以 **PP=3（Pipeline Parallelism）+ TP=8** 部署 Kimi-K3
+(`/data/models/Kimi-K3`, MXFP4 量化 1.5TB, 93 层 ÷ 3 = 每 stage 31 层)，
+每节点使用全部 8 张 H20 GPU：
 
-- **PP Stage 0（Node 0, layers 0-N/2）**：192.168.0.63，4 GPU（TP=4）
-- **PP Stage 1（Node 1, layers N/2+1-N）**：192.168.0.65，4 GPU（TP=4）
+| 节点 | 内网 IP | PP stage | 角色 |
+|------|---------|----------|------|
+| Node 0 (aliyun1) | 192.168.0.224 | stage 0 (layers 0-30) | master, 收集结果 |
+| Node 1 (aliyun2) | 192.168.0.225 | stage 1 (layers 31-61) | worker |
+| Node 2 (aliyun3) | 192.168.0.226 | stage 2 (layers 62-92) | worker |
 
-通过 `torchrun` + `external_launcher` 后端在两节点各启动 4 个进程（每 GPU 一个），
-total world_size=8，所有进程通过 NCCL over TCP 协调，仅 rank 0 收集和记录结果。
+通过 `torchrun` + `external_launcher` 后端在三节点各启动 8 个进程（每 GPU 一个），
+total world_size=24，所有进程通过 NCCL over TCP 协调，仅 rank 0 收集和记录结果。
 
-> **设计注**：当前实现使用 `external_launcher` 后端。Plan agent 在 vLLM 源码级
-> 分析后建议切换为 `mp` 后端 + Leader/Follower 架构（更符合 PP 语义），
-> 该重构待后续迭代完成。
+## 使用方式
+
+在**三台服务器上分别执行**（先 worker 后 master 或同时均可，torchrun 会等待）：
+
+```bash
+cd /home/tjy/codebases/deepseek-PP2-deploy/phase1
+
+# aliyun1 (192.168.0.224):  ./launch_pp.sh 0
+# aliyun2 (192.168.0.225):  ./launch_pp.sh 1
+# aliyun3 (192.168.0.226):  ./launch_pp.sh 2
+```
+
+运行流程：三机同时加载权重（页缓存热时 ~10 min，冷盘可能 2h）→ 全部 rank 就绪后
+leader 依次以 `CONTEXT_LENGTHS` 每个 context 长度发一个 256 输出 token 的请求 →
+结果写入 `results/`（CSV + `full_results.json` + report，仅 leader 本机）。
 
 ## 文件说明
 
 | 文件 | 作用 |
 |------|------|
-| `config_pp.py` | PP 专用常量：`MODEL_PATH="/data/model/GLM-5.2-FP8"`、`PP_SIZE=2`、`TP_SIZE_PER_PP=4`（每节点 4 卡）、`NNODES=2`、`WORLD_SIZE_PP=8`、`MASTER_ADDR`/`MASTER_PORT`；自动从 torchrun 环境变量检测 `GLOBAL_RANK`、`LOCAL_RANK`、`NODE_RANK`、`IS_LEADER`；re-export 基础 config 的模型/缓存常量 |
-| `run_pp.py` | PP 推理核心 — `run_pp()`：每个 torchrun 进程创建一个 `LLM` 实例（`pipeline_parallel_size=2, tensor_parallel_size=4, distributed_executor_backend="external_launcher"`），warmup 后按 context 长度遍历；仅 `IS_LEADER`（global rank 0）负责计时、打印、CSV/JSON 写入；指标采集逻辑与 `run_tp.py` 完全一致 |
-| `profile_dsv4_pp.py` | PP 入口脚本：在 vLLM 导入之前安装 `comm_crypto` 加密 hooks（若 `VLLM_COMM_PSK` 设了则生效），然后调用 `run_pp()`；leader 在完成后输出 `full_results.json` 和 report；失败时自动降级 `max_model_len=32768` 重试 |
-| `launch_pp.sh` | torchrun 启动包装脚本：在两节点上分别运行（传入不同的 `--node_rank`）；设置 NCCL 环境变量（`NCCL_IB_DISABLE=1`、`NCCL_SOCKET_IFNAME=eth0`、`GLOO_SOCKET_IFNAME=eth0` 等）和 `VLLM_ENABLE_V1_MULTIPROCESSING=0`；激活 `ds` conda 环境后执行 torchrun |
-
-## 使用方式
-
-```bash
-cd phase1
-# Node 0 (192.168.0.63):  ./launch_pp.sh 0
-# Node 1 (192.168.0.65):  ./launch_pp.sh 1
-```
+| `config_pp.py` | K3 专用常量：`MODEL_PATH=/data/models/Kimi-K3`、`PP_SIZE=3`、`TP_SIZE_PER_PP=8`、`NNODES=3`、`MASTER_ADDR=192.168.0.224`、`MAX_MODEL_LEN=32768`、`CONTEXT_LENGTHS=[512..16384]`；自动从 torchrun 环境变量检测 rank/is_leader；`validate_config()` 校验一致性 |
+| `run_pp.py` | PP 推理核心 — 每个 torchrun 进程创建 `LLM(pipeline_parallel_size=3, tensor_parallel_size=8, distributed_executor_backend="external_launcher", distributed_timeout_seconds=10800, cpu_distributed_timeout_seconds=10800, ...)`；指标采集 (TTFT/prefill_tps/decode_tps/tpot) 与 phase2/phase0 一致 |
+| `profile_dsv4_pp.py` | 入口脚本：vLLM 导入前安装 `comm_crypto` hooks（无 `VLLM_COMM_PSK` 时 no-op），调用 `run_pp()`；leader 写 `full_results.json` 与 report；失败时降级 `max_model_len=16384` 重试 |
+| `launch_pp.sh` | torchrun 启动包装：`./launch_pp.sh <0|1|2>`；NCCL TCP 环境变量（`NCCL_IB_DISABLE=1`、`NCCL_SOCKET_IFNAME=eth0`、`NCCL_CUMEM_HOST_ENABLE=0`）、`HF_HUB_OFFLINE=1`、`VLLM_ENABLE_V1_MULTIPROCESSING=0`；激活 `vllm` conda 环境 |
 
 ## 前置条件
 
-- 两节点间免密 SSH
-- 两节点均有 `ds` conda 环境（vLLM 0.26.0）
-- 模型路径 `/data/model/GLM-5.2-FP8/` 在两节点一致（共享存储或副本）
-- 两节点代码库路径一致
+- 三节点间免密 SSH（aliyun1 自身公钥也已加入本机 authorized_keys）
+- 三节点均有 `vllm` conda 环境（vLLM 0.27.1，官方支持 Kimi-K3）
+- `/data/models/Kimi-K3` 三机一致
+- 三节点代码库路径一致
+
+## ⚠️ 必须先打的 vllm 补丁
+
+vLLM 0.27.1 有两个会导致三机部署直接崩溃/输出垃圾的已知问题，**必须在三台机器上都打好补丁**
+（补丁脚本在 `/home/tjy/codebases/Kimi_deploy/`）：
+
+```bash
+# 1) FA3 "cp_world_size must be positive" 崩溃 (vllm PR #50625/#50404):
+#    MLACommonImpl 把 dcp_world_size 覆盖为 -1 哨兵, Kimi-K3 直调 forward_mqa
+#    绕过惰性修复 -> CUDA graph 捕获时 FA3 收到 -1 崩溃。不修则无法启动。
+# 2) gloo 组 1800s 超时: 三机加载不均衡 >30min 时先加载完的节点超时崩溃。
+#    修复已在 run_pp.py 里 (cpu_distributed_timeout_seconds=10800), 无需额外操作。
+source ~/miniconda3/etc/profile.d/conda.sh && conda activate vllm
+for ip in 192.168.0.224 192.168.0.225 192.168.0.226; do
+  scp /home/tjy/codebases/Kimi_deploy/patch_vllm.py tjy@$ip:/home/tjy/kimi_bench/bin/
+  ssh tjy@$ip 'source ~/miniconda3/etc/profile.d/conda.sh && conda activate vllm \
+    && python3 /home/tjy/kimi_bench/bin/patch_vllm.py'
+done
+```
+
+## 与 Phase 2 的集成
+
+`run_pp()` 加载完的 `LLM` 实例可直接交给 phase2 的 benchmark runner：
+
+```python
+from phase1.run_pp import run_pp          # 或自行创建 LLM
+from phase2.run_bench import run_needle_benchmark
+
+llm = LLM(pipeline_parallel_size=3, tensor_parallel_size=8, ...)
+run_needle_benchmark(llm, tag="K3_PP3_TP8_needle")
+```
+
+## 已知问题 (2026-08-20)
+
+- **输出质量**: 模型输出可能退化为重复的 "@"（logprobs 含 NaN）。已确认与
+  CUDA graphs 无关（eager 模式同样出现），怀疑是 mxfp4 MoE kernel 路径
+  （MARLIN 后端, H20/sm_90）的问题，类似 vllm issue #47303。诊断工具：
+  `/home/tjy/codebases/Kimi_deploy/nan_hook.py`（`apply`/`remove`，
+  在每层 forward 后检查 NaN 并打印首个 NaN 层号，三机各跑一次）。
+  吞吐/通信/计算的**计时数据不受影响**（kernel 仍在执行）。
+- **32k 上下文**: `MAX_MODEL_LEN=32768` 时 32k prompt + 输出放不下,
+  `CONTEXT_LENGTHS` 止步 16384；测 32768 需把 `MAX_MODEL_LEN` 提到 65536
+  （注意 KV cache 显存余量，每卡权重已占 62.5GB）。

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Profile GLM5.2 inference with vLLM — PP=2 TP=4 across two nodes.
+Profile Kimi-K3 inference with vLLM — PP=3 TP=8 across three nodes.
 
 Launched via torchrun on each node (see ``launch_pp.sh``).  Every process runs
 the same script; only global rank 0 collects and logs results.
 
 Usage (indirect — via launch_pp.sh)::
 
-    torchrun --nnodes=2 --nproc_per_node=4 --node_rank=0 \\
-        --master_addr=192.168.0.63 --master_port=29500 \\
+    torchrun --nnodes=3 --nproc_per_node=8 --node_rank=0 \\
+        --master_addr=192.168.0.224 --master_port=29500 \\
         profile_dsv4_pp.py
 
 The heavy-lifting functions live in:
@@ -75,12 +75,12 @@ if __name__ == "__main__":
         torch.cuda.empty_cache()
         time.sleep(5)  # wait for NCCL connections to fully release
 
-        # Retry with smaller max_model_len
+        # Retry with smaller max_model_len (OOM / 长上下文兜底)
         try:
             if cfg.IS_LEADER:
-                print(f"Retrying with max_model_len=32768...")
+                print(f"Retrying with max_model_len=16384...")
             old = cfg.MAX_MODEL_LEN
-            cfg.MAX_MODEL_LEN = 32768
+            cfg.MAX_MODEL_LEN = 16384
             run_pp()
             cfg.MAX_MODEL_LEN = old
         except Exception as e2:
@@ -105,4 +105,5 @@ if __name__ == "__main__":
         with open(json_path, "w") as f:
             json.dump({"metadata": metadata, "results": ALL_RESULTS}, f, indent=2)
 
-        write_report_and_summary(title="PP=2 TP=4 GLM5.2 两节点部署")
+        write_report_and_summary(title="PP=3 TP=8 Kimi-K3 三节点部署",
+                                 metadata=metadata)
