@@ -40,21 +40,24 @@ from phase0.results_utils import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _load_model(tp: int, *, enable_expert_parallel: bool = False) -> LLM:
+def _load_model(
+    tp: int, *, enable_expert_parallel: bool = False, max_model_len: int | None = None
+) -> LLM:
     """Load the model with TP parallelism and return the LLM instance.
 
     ``enable_expert_parallel=True`` switches MoE expert layers to expert
     parallelism (vLLM 0.26 derives EP size = world_size // TP
     automatically, e.g. TP=2 on 4 GPUs → EP=2).
     """
+    max_model_len = max_model_len or config.MAX_MODEL_LEN
     print(f"\n{'='*60}\nLoading model TP={tp}"
           + (" EP=on" if enable_expert_parallel else "")
-          + f", max_model_len={config.MAX_MODEL_LEN}\n{'='*60}")
+          + f", max_model_len={max_model_len}\n{'='*60}")
 
     llm = LLM(
         model=config.MODEL_PATH,
         tensor_parallel_size=tp,
-        max_model_len=config.MAX_MODEL_LEN,
+        max_model_len=max_model_len,
         gpu_memory_utilization=config.GPU_MEM_UTIL,
         trust_remote_code=True,
         kv_cache_dtype=config.KV_CACHE_DTYPE,
@@ -298,6 +301,10 @@ def run_batch_benchmark(
     token counts for the summary.
     """
     output_len = output_len if output_len is not None else config.OUTPUT_LEN
+
+    if not prompts:
+        raise SystemExit("ERROR: 0 valid prompts (workload data missing or all "
+                         "filtered by max_model_len) — aborting before warmup")
 
     ensure_results_dir()
     open_csv(tp=tp, tag=tag, extra_fields=extra_fields)

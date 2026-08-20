@@ -1,18 +1,23 @@
 #!/bin/bash
-# EP 与调度实验（batch 扫描结论的后续）：
-#   Exp1: TP=2+EP=2 vs TP=4 基准（各跑 b=1 / b=4，对比 TPOT 与边际成本）
-#   Exp2: length-aware 提交（按 ctx 排序 + 全量一次提交，对比 FIFO 的 -1）
+# EP 与调度实验 v2 — 合成 workload（LongBench 数据已不在本机，用 make_prompt 合成）
 #
-# 用法:
-#   bash phase2/run_ep_scheduler_exp.sh
-#   自动挑选 4 张空闲 GPU；每个组合独立 python 进程（独立时间戳结果目录）。
-#   结果目录: phase0/profile_results/<时间戳>/，汇总见 reports/ep_scheduler_experiments/
+# A 组：EP 对照（短 ctx 集 {1K,2K,4K}×10，maxlen 6144，4×GPU）
+#   A1 TP4      b=1   ← EP 基准
+#   A2 TP4      b=4
+#   A3 TP2+EP2  b=1   ← 假设：专家按卡分片+定向 dispatch 降低 TPOT 与边际成本
+#   A4 TP2+EP2  b=4
+# B 组：length-aware（混合 ctx 40 条 {32K×4,16K×5,8K×6,4K×7,2K×8,1K×10}，maxlen 64K，TP4）
+#   B1 -1 FIFO（长→短提交） ← 长 prompt 堵死短请求
+#   B2 -1 SJF （按 ctx 升序） ← 假设：TTFT 分位数大幅下降
+#
+# 用法: bash phase2/run_ep_scheduler_exp.sh
+# 结果: phase0/profile_results/<时间戳>/，汇总见 reports/ep_scheduler_experiments/
 
 set -eo pipefail
 cd "$(dirname "$0")"
 
 source /home/tjy/miniconda3/etc/profile.d/conda.sh 2>/dev/null || true
-conda activate vllm
+conda activate ds
 
 # 自动创建 libcuda.so 软链接（如果缺失）
 mkdir -p "$CONDA_PREFIX/lib64"
@@ -43,26 +48,43 @@ GPUS=$(echo "$FREE_GPUS" | cut -d, -f1-4)
 echo "使用 GPU: $GPUS"
 export CUDA_VISIBLE_DEVICES=$GPUS
 
-run_one() {  # $1=描述  $2=TP  $3=EP  $4=BATCH  $5=SORT_BY_LEN
+# ---- workload 定义 ----
+SHORT="1024,1024,1024,1024,1024,1024,1024,1024,1024,1024,\
+2048,2048,2048,2048,2048,2048,2048,2048,2048,2048,\
+4096,4096,4096,4096,4096,4096,4096,4096,4096,4096"
+SHORT=$(echo "$SHORT" | tr -d '\n')
+MIXED_DESC="32768,32768,32768,32768,\
+16384,16384,16384,16384,16384,\
+8192,8192,8192,8192,8192,8192,\
+4096,4096,4096,4096,4096,4096,4096,\
+2048,2048,2048,2048,2048,2048,2048,2048,\
+1024,1024,1024,1024,1024,1024,1024,1024,1024,1024"
+MIXED_DESC=$(echo "$MIXED_DESC" | tr -d '\n')
+
+run_one() {  # $1=描述 $2=TP $3=EP $4=BATCH $5=SORT $6=LENGTHS $7=MAXLEN
     echo ""
     echo "######################################################"
-    echo " # $1  (TP=$2 EP=$3 batch=$4 sort=$5)"
+    echo " # $1  (TP=$2 EP=$3 batch=$4 sort=$5 maxlen=$7)"
     echo "######################################################"
     if LONGBENCH_TP=$2 LONGBENCH_EP=$3 LONGBENCH_BATCH_SIZE=$4 \
-       LONGBENCH_SORT_BY_LEN=$5 python run_longbench.py; then
+       LONGBENCH_SORT_BY_LEN=$5 LONGBENCH_SYNTH_LENGTHS="$6" \
+       LONGBENCH_MAX_MODEL_LEN=$7 python run_longbench.py; then
         echo "OK: $1"
     else
         echo "FAILED: $1 (继续下一个)"
     fi
 }
 
-# Exp1: EP 对照（对比基准: TP4/EP1 b1≈b0 目录 20260814_233513、b4 目录 20260815_232828）
-run_one "TP2+EP2 b=1" 2 1 1 0
-run_one "TP2+EP2 b=4" 2 1 4 0
+# ---- A 组：EP 对照 ----
+run_one "A1 TP4 b=1"        4 0 1  0 "$SHORT"     6144
+run_one "A2 TP4 b=4"        4 0 4  0 "$SHORT"     6144
+run_one "A3 TP2+EP2 b=1"    2 2 1  0 "$SHORT"     6144
+run_one "A4 TP2+EP2 b=4"    2 2 4  0 "$SHORT"     6144
 
-# Exp2: length-aware（对比基准: FIFO 的 -1 目录 20260815_000022）
-run_one "TP4 length-aware -1" 4 0 -1 1
+# ---- B 组：length-aware ----
+run_one "B1 TP4 -1 FIFO"    4 0 -1 0 "$MIXED_DESC" 65536
+run_one "B2 TP4 -1 SJF"     4 0 -1 1 "$MIXED_DESC" 65536
 
 echo ""
-echo "全部完成。最近 3 个结果目录:"
-ls -dt ../phase0/profile_results/*/ 2>/dev/null | head -3 || true
+echo "全部完成。最近 6 个结果目录:"
+ls -dt ../phase0/profile_results/*/ 2>/dev/null | head -6 || true

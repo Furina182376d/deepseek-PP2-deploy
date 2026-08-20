@@ -22,6 +22,7 @@ if _PROJ not in sys.path:
     sys.path.insert(0, _PROJ)
 
 import phase0.config as config
+from phase0.prompt_utils import make_prompt
 from phase0.run_tp import _load_model, _print_gpu_mem, run_batch_benchmark, run_prompt_benchmark
 from phase0.results_utils import (
     ALL_RESULTS,
@@ -49,11 +50,38 @@ MAX_SAMPLES = _parse_max_samples()
 # N > 0 = chunked batch of N per generate call; -1 = all prompts at once.
 BATCH_SIZE = int(os.environ.get("LONGBENCH_BATCH_SIZE", "0"))
 # Parallelism: LONGBENCH_TP (default 4), LONGBENCH_EP (default 0 = 纯 TP;
-# >0 → enable_expert_parallel，vLLM 自动 EP = world//TP).
+# >1 → enable_expert_parallel，EP size = LONGBENCH_EP，world = TP×EP).
 LONGBENCH_TP = int(os.environ.get("LONGBENCH_TP", "4"))
 LONGBENCH_EP = int(os.environ.get("LONGBENCH_EP", "0"))
 # SJF-style submission: sort prompts by length before batching.
 SORT_BY_LEN = os.environ.get("LONGBENCH_SORT_BY_LEN") == "1"
+# Synthetic workload (LongBench data unavailable): comma-separated context
+# lengths, e.g. "1024,1024,2048".  Empty = use LongBench datasets on disk.
+SYNTH_LENGTHS = [
+    int(x) for x in os.environ.get("LONGBENCH_SYNTH_LENGTHS", "").split(",") if x.strip()
+]
+# Model context window override (default config.MAX_MODEL_LEN).
+MAX_MODEL_LEN = int(os.environ.get("LONGBENCH_MAX_MODEL_LEN", config.MAX_MODEL_LEN))
+
+
+def iter_synth_prompts(tokenizer):
+    """Yield synthetic prompts at the requested context lengths
+    (FILLER_PARAGRAPHS-based, tokenized and truncated to exact length)."""
+    max_prompt_len = MAX_MODEL_LEN - OUTPUT_LEN
+    for i, ctx_len in enumerate(SYNTH_LENGTHS):
+        if ctx_len > max_prompt_len:
+            continue
+        text = make_prompt(ctx_len)
+        t0 = time.perf_counter()
+        ids = tokenizer.encode(text)[:ctx_len]
+        tokenize_ms = (time.perf_counter() - t0) * 1000
+        yield {
+            "label": f"synth_{ctx_len}",
+            "prompt": text,
+            "prompt_token_ids": ids,
+            "tokenize_ms": tokenize_ms,
+            "task": f"synth_{ctx_len}",
+        }
 
 
 def iter_longbench_prompts(tokenizer):
@@ -95,11 +123,13 @@ def iter_longbench_prompts(tokenizer):
 
 if __name__ == "__main__":
     tp = LONGBENCH_TP
-    ep_on = LONGBENCH_EP > 0
+    ep_on = LONGBENCH_EP > 1
     world = tp * LONGBENCH_EP if ep_on else tp
-    tag = f"tp{tp}_longbench" if not ep_on else f"tp{tp}_ep{LONGBENCH_EP}_longbench"
+    src = "synth" if SYNTH_LENGTHS else "longbench"
+    tag = f"tp{tp}_{src}_m{MAX_MODEL_LEN}" if not ep_on else \
+        f"tp{tp}_ep{LONGBENCH_EP}_{src}_m{MAX_MODEL_LEN}"
 
-    llm = _load_model(tp, enable_expert_parallel=ep_on)
+    llm = _load_model(tp, enable_expert_parallel=ep_on, max_model_len=MAX_MODEL_LEN)
     _print_gpu_mem(world)
 
     # Global warmup
@@ -111,11 +141,12 @@ if __name__ == "__main__":
 
     # Collect prompts (need tokenizer for length filtering)
     tokenizer = llm.get_tokenizer()
-    prompts = list(iter_longbench_prompts(tokenizer))
+    prompts = list(iter_synth_prompts(tokenizer)) if SYNTH_LENGTHS \
+        else list(iter_longbench_prompts(tokenizer))
     if SORT_BY_LEN:
         prompts.sort(key=lambda p: len(p["prompt_token_ids"]))
         print("Prompts sorted by length (SJF-style submission)")
-    print(f"\nLoaded {len(prompts)} valid prompts across datasets")
+    print(f"\nLoaded {len(prompts)} valid prompts ({src})")
 
     # Run
     batch_stats = None
@@ -147,7 +178,7 @@ if __name__ == "__main__":
     metadata = {
         "model_path": config.MODEL_PATH,
         "timestamp": TIMESTAMP,
-        "max_model_len": config.MAX_MODEL_LEN,
+        "max_model_len": MAX_MODEL_LEN,
         "gpu_memory_utilization": config.GPU_MEM_UTIL,
         "kv_cache_dtype": config.KV_CACHE_DTYPE,
         "output_len": OUTPUT_LEN,
@@ -157,7 +188,10 @@ if __name__ == "__main__":
         "batch_size": BATCH_SIZE,
         "tp": tp,
         "expert_parallel": ep_on,
+        "expert_parallel_size": LONGBENCH_EP if ep_on else 0,
         "sort_by_len": SORT_BY_LEN,
+        "source": src,
+        "synth_lengths": SYNTH_LENGTHS or None,
     }
     json_path = os.path.join(RESULTS_DIR, "full_results.json")
     with open(json_path, "w") as f:

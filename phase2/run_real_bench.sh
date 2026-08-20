@@ -3,7 +3,7 @@
 # Usage: bash phase2/run_real_bench.sh
 
 source /home/tjy/miniconda3/etc/profile.d/conda.sh 2>/dev/null || true
-conda activate vllm
+conda activate ds
 
 # 自动创建 libcuda.so 软链接（如果缺失）
 mkdir -p "$CONDA_PREFIX/lib64"
