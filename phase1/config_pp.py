@@ -41,6 +41,12 @@ MAX_MODEL_LEN = 32768
 # KV cache 交给 vllm 自动选择 (K3 MLA 支持 fp8_ds_mla, auto 最稳)
 KV_CACHE_DTYPE = "auto"
 
+# FlashInfer autotune 会在 warmup 阶段对 24 个 rank 做 gloo 广播 (基准测试前)。
+# 三节点环境下若某节点 flashinfer 版本不一致, 该 rank 会在广播前崩溃并拖垮全局
+# (Connection closed by peer)。 这是纯优化项, 关闭后 flashinfer 走启发式选择。
+# 定位问题期间置 False, 修复后可改回 True。
+ENABLE_FLASHINFER_AUTOTUNE = False
+
 # ---- torchrun supplies these via env vars ----
 GLOBAL_RANK = int(os.environ.get("RANK", 0))
 LOCAL_RANK = int(os.environ.get("LOCAL_RANK", 0))
