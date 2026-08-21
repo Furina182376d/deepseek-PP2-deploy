@@ -22,6 +22,7 @@ import json
 import os
 import sys
 import time
+import traceback
 
 # ---- Force local file resolution for HuggingFace libraries ----
 # Must be set BEFORE any vLLM/transformers import, otherwise the Hub
@@ -67,6 +68,8 @@ if __name__ == "__main__":
         run_pp()
     except Exception as e:
         print(f"\n[rank {cfg.GLOBAL_RANK}] PP run failed: {e}", file=sys.stderr)
+        # 首次失败必须打完整 traceback —— 这是定位真凶的唯一途径
+        traceback.print_exc()
 
         # ---- Force cleanup before retry ----
         import gc
@@ -74,6 +77,26 @@ if __name__ == "__main__":
         gc.collect()
         torch.cuda.empty_cache()
         time.sleep(5)  # wait for NCCL connections to fully release
+
+        # vLLM 引擎初始化失败后, 权重/NCCL 缓冲/CUDA graph 的显存通常不会随
+        # 异常释放; 此时在同一进程内重试必然死在 request_memory 的显存检查上,
+        # 报出误导性的 "Free memory ... less than desired"。 重试前先看真实
+        # 空闲显存, 不足预算就直接以原始错误退出 (torchrun 层可以重启)。
+        free_gb, total_gb = torch.cuda.mem_get_info(cfg.LOCAL_RANK)
+        free_gb, total_gb = free_gb / 2**30, total_gb / 2**30
+        if cfg.IS_LEADER:
+            print(
+                f"[rank {cfg.GLOBAL_RANK}] GPU {cfg.LOCAL_RANK}: "
+                f"free {free_gb:.1f} / {total_gb:.1f} GiB after cleanup"
+            )
+        if free_gb < cfg.GPU_MEM_UTIL * total_gb:
+            print(
+                f"[rank {cfg.GLOBAL_RANK}] free {free_gb:.1f} GiB < "
+                f"gpu_memory_utilization budget {cfg.GPU_MEM_UTIL * total_gb:.1f} GiB — "
+                f"retry would OOM again; aborting. See traceback above for the real error.",
+                file=sys.stderr,
+            )
+            raise  # re-raise the ORIGINAL first-attempt error
 
         # Retry with smaller max_model_len (OOM / 长上下文兜底)
         try:
