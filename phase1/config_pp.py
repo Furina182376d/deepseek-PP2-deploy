@@ -18,7 +18,10 @@ from phase0.config import (  # noqa: F401 — re-export for convenience
 # K3 专用: MAX_MODEL_LEN=32768, 32k 的 prompt 会放不下 256 个输出 token,
 # 所以 context 扫描止步 16384 (如需 32768 请把 MAX_MODEL_LEN 提到 65536,
 # 但要注意 KV cache 显存余量)
-CONTEXT_LENGTHS = [512, 1024, 2048, 4096, 8192, 16384]
+# Decode-only observation run: single short context, so the dmon window is
+# almost entirely decode. Restore the full sweep afterwards:
+#   CONTEXT_LENGTHS = [512, 1024, 2048, 4096, 8192, 16384]
+CONTEXT_LENGTHS = [512]
 
 # ---- 模型 (三台机器均为 /data/models/Kimi-K3) ----
 MODEL_PATH = "/data/models/Kimi-K3"
