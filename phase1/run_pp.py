@@ -128,6 +128,9 @@ def run_pp():
         pipeline_parallel_size=cfg.PP_SIZE,
         tensor_parallel_size=tp_per_pp,
         max_model_len=cfg.MAX_MODEL_LEN,
+        # K3 含 Mamba 层, 默认 1024 > 单卡可容纳的 Mamba cache block 数 (900),
+        # 必须显式降低, 否则 CUDA graph 捕获检查直接失败
+        max_num_seqs=cfg.MAX_NUM_SEQS,
         gpu_memory_utilization=cfg.GPU_MEM_UTIL,
         trust_remote_code=True,
         kv_cache_dtype=cfg.KV_CACHE_DTYPE,

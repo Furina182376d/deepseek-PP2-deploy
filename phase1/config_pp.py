@@ -47,6 +47,12 @@ KV_CACHE_DTYPE = "auto"
 # 定位问题期间置 False, 修复后可改回 True。
 ENABLE_FLASHINFER_AUTOTUNE = False
 
+# K3 含 Mamba (SSM) 层: 每个 decode 序列占一个 Mamba cache block。 PP=3 时
+# stage-1 节点显存只够 900 个 block, 而 vLLM 默认 max_num_seqs=1024, 会在
+# CUDA graph 捕获检查直接失败 (max_num_seqs exceeds available Mamba cache
+# blocks)。 profiling 每次只发 1 条序列, 512 足够且有安全余量。
+MAX_NUM_SEQS = 512
+
 # ---- torchrun supplies these via env vars ----
 GLOBAL_RANK = int(os.environ.get("RANK", 0))
 LOCAL_RANK = int(os.environ.get("LOCAL_RANK", 0))
