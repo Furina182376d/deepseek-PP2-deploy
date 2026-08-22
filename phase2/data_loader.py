@@ -36,11 +36,20 @@ from phase2.benchmark_config import (
 
 def _find_local_json(name: str) -> str | None:
     """Find a JSON/JSONL file for a LongBench task in known directories."""
+    aliases = {
+        "narrative_qa": "narrativeqa",
+        "gov_report": "gov_report",
+    }
+    names = [name]
+    if name in aliases:
+        names.append(aliases[name])
     for data_dir in LONGBENCH_DATA_DIRS:
-        for ext in (".jsonl", ".json"):
-            candidate = os.path.join(data_dir, f"{name}{ext}")
-            if os.path.isfile(candidate):
-                return candidate
+        for base_dir in (data_dir, os.path.join(data_dir, "data")):
+            for candidate_name in names:
+                for ext in (".jsonl", ".json"):
+                    candidate = os.path.join(base_dir, f"{candidate_name}{ext}")
+                    if os.path.isfile(candidate):
+                        return candidate
     return None
 
 
