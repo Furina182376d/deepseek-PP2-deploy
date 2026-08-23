@@ -56,6 +56,8 @@ if __name__ == "__main__":
         f"[rank {cfg.GLOBAL_RANK}/{cfg.WORLD_SIZE}  "
         f"local {cfg.LOCAL_RANK}/{cfg.LOCAL_WORLD_SIZE}  "
         f"pp={cfg.PP_SIZE}  tp_per_pp={cfg.TP_SIZE_PER_PP}  "
+        f"partition={cfg.PP_LAYER_PARTITION or (31, 31, 31)}  "
+        f"experiment={cfg.PP_EXPERIMENT_ID}  "
         f"backend={cfg.DISTRIBUTED_EXECUTOR_BACKEND}]"
     )
 
@@ -116,10 +118,13 @@ if __name__ == "__main__":
             "model_path": cfg.MODEL_PATH,
             "timestamp": TIMESTAMP,
             "pp_size": cfg.PP_SIZE,
+            "pp_layer_partition": cfg.PP_LAYER_PARTITION or (31, 31, 31),
+            "pp_experiment_id": cfg.PP_EXPERIMENT_ID,
             "tp_per_pp": cfg.TP_SIZE_PER_PP,
             "nnodes": cfg.NNODES,
             "distributed_executor_backend": cfg.DISTRIBUTED_EXECUTOR_BACKEND,
             "max_model_len": cfg.MAX_MODEL_LEN,
+            "max_num_seqs": cfg.MAX_NUM_SEQS,
             "gpu_memory_utilization": cfg.GPU_MEM_UTIL,
             "kv_cache_dtype": cfg.KV_CACHE_DTYPE,
             "output_len": cfg.OUTPUT_LEN,

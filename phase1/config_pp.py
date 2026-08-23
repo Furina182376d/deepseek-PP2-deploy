@@ -12,8 +12,12 @@ if _PROJ not in sys.path:
 # Keep a shared reference to the base config for generic benchmark settings.
 from phase0.config import (  # noqa: F401 — re-export for convenience
     GPU_MEM_UTIL,
-    OUTPUT_LEN,
+    OUTPUT_LEN as _BASE_OUTPUT_LEN,
 )
+
+# Rebalance experiments can use the same 64-token decode window as the
+# original stage breakdown without changing the phase0 default workload.
+OUTPUT_LEN = int(os.environ.get("PP_OUTPUT_LEN", _BASE_OUTPUT_LEN))
 
 # K3 专用: MAX_MODEL_LEN=32768, 32k 的 prompt 会放不下 256 个输出 token,
 # 所以 context 扫描止步 16384 (如需 32768 请把 MAX_MODEL_LEN 提到 65536,
@@ -30,6 +34,18 @@ MODEL_PATH = "/data/models/Kimi-K3"
 PP_SIZE = 3
 TP_SIZE_PER_PP = 8         # each PP stage uses 8 GPUs on the node
 WORLD_SIZE_PP = PP_SIZE * TP_SIZE_PER_PP  # 24 — total workers across 3 nodes
+
+# Optional non-uniform pipeline split. vLLM reads VLLM_PP_LAYER_PARTITION
+# before model construction; keep the parsed value here for validation and
+# experiment metadata. Kimi-K3 has 93 transformer layers.
+NUM_HIDDEN_LAYERS = 93
+_PP_PARTITION_RAW = os.environ.get("VLLM_PP_LAYER_PARTITION", "")
+PP_LAYER_PARTITION = (
+    tuple(int(value) for value in _PP_PARTITION_RAW.split(","))
+    if _PP_PARTITION_RAW
+    else None
+)
+PP_EXPERIMENT_ID = os.environ.get("PP_EXPERIMENT_ID", "baseline_31_31_31")
 
 NNODES = 3
 # 三机内网: aliyun1=.224 (rank0/master), aliyun2=.225 (rank1), aliyun3=.226 (rank2)
@@ -54,7 +70,7 @@ ENABLE_FLASHINFER_AUTOTUNE = False
 # stage-1 节点显存只够 900 个 block, 而 vLLM 默认 max_num_seqs=1024, 会在
 # CUDA graph 捕获检查直接失败 (max_num_seqs exceeds available Mamba cache
 # blocks)。 profiling 每次只发 1 条序列, 512 足够且有安全余量。
-MAX_NUM_SEQS = 512
+MAX_NUM_SEQS = int(os.environ.get("PP_MAX_NUM_SEQS", "512"))
 
 # ---- torchrun supplies these via env vars ----
 GLOBAL_RANK = int(os.environ.get("RANK", 0))
@@ -68,6 +84,10 @@ IS_LEADER = GLOBAL_RANK == 0
 def validate_config():
     """Verify that environment-supplied values are consistent with config."""
     errors = []
+    if OUTPUT_LEN <= 1:
+        errors.append(f"PP_OUTPUT_LEN must be greater than 1, got {OUTPUT_LEN}")
+    if MAX_NUM_SEQS <= 0:
+        errors.append(f"PP_MAX_NUM_SEQS must be positive, got {MAX_NUM_SEQS}")
     if LOCAL_WORLD_SIZE != TP_SIZE_PER_PP:
         errors.append(
             f"LOCAL_WORLD_SIZE={LOCAL_WORLD_SIZE} != TP_SIZE_PER_PP={TP_SIZE_PER_PP}"
@@ -82,6 +102,19 @@ def validate_config():
             f"WORLD_SIZE={WORLD_SIZE} != NNODES*LOCAL_WORLD_SIZE="
             f"{NNODES * LOCAL_WORLD_SIZE}"
         )
+    if PP_LAYER_PARTITION is not None:
+        if len(PP_LAYER_PARTITION) != PP_SIZE:
+            errors.append(
+                f"VLLM_PP_LAYER_PARTITION has {len(PP_LAYER_PARTITION)} entries; "
+                f"expected PP_SIZE={PP_SIZE}"
+            )
+        if any(layers <= 0 for layers in PP_LAYER_PARTITION):
+            errors.append("VLLM_PP_LAYER_PARTITION entries must all be positive")
+        if sum(PP_LAYER_PARTITION) != NUM_HIDDEN_LAYERS:
+            errors.append(
+                f"VLLM_PP_LAYER_PARTITION sums to {sum(PP_LAYER_PARTITION)}; "
+                f"expected {NUM_HIDDEN_LAYERS} model layers"
+            )
     if errors:
         raise RuntimeError(
             "Config validation failed:\n  " + "\n  ".join(errors)
