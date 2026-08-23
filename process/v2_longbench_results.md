@@ -49,3 +49,79 @@ JIT 计入。
 
 当前最可靠的结论是：真实长文本请求在该部署上的端到端速度约为 **1.49--2.23 output tok/s**，
 但这轮数据仍是冷启动样本，不能据此宣称稳态性能已经测完。
+
+## 与既有 decode 瓶颈结论的关系
+
+需要把“稳态 decode 结论”和“本轮长文本端到端结果”分开解释：
+
+### 稳态 decode：原结论仍成立
+
+此前启用 K3 CUDA Event 的稳态 decode 测量已经确认：
+
+```text
+PP stage 0 model: 161.27 ms/step
+MoE/MLP:          106.05 ms = 65.8%
+Attention:         48.39 ms = 30.0%
+Other:              6.82 ms =  4.2%
+```
+
+目前没有新的证据推翻该结论。对 decode 临界路径而言，最慢的仍是 PP stage 0，最大
+组成仍是 MoE/MLP。
+
+### 本轮 LongBench：没有重新验证 decode 内部分解
+
+本轮真实长文本测试没有启用之前的 K3 Event 细分插桩，且 external-launcher PP 路径没有
+提供有效的 `TTFT/TPOT` metrics。因此：
+
+- `qmsum` 的 6334 prompt tokens、128 output tokens、85.96 s 是端到端 wall-clock；
+- `gov_report` 的 4169 prompt tokens、128 output tokens、57.49 s 也是端到端 wall-clock；
+- `1.49--2.23 output tok/s` 不能直接与之前稳态 decode 的约 `5.9--6.2 tok/s` 对比；
+- 输出速度不是 decode-only 速度，因为它包含长文本 prefill 和首次真实 workload 的 JIT。
+
+本轮日志明确出现了 `_causal_conv1d_fwd_kernel`、`_gather_initial_states_kernel` 和
+`layer_norm_gated_fwd_kernel` 的 Triton JIT warning。因而长文本请求的总时间很可能被
+长 prefill 与冷启动 JIT 显著污染；仅凭本轮 wall-clock，不能断言端到端总时间仍主要由
+decode 贡献，也不能断言真实 workload 下 decode 仍严格保持 `65.8%/30.0%` 的内部比例。
+
+## 当前最终判断
+
+> 真实 workload 证明系统在长文本场景下仍然很慢，但本轮没有证明端到端总时间仍由 decode
+> 主导；稳态 decode 的 MoE/MLP 瓶颈结论仍有效，但其内部时间分布尚未在真实 LongBench
+> 请求上重新测量。
+
+要完成这一验证，应对同一 LongBench 样本先 warm-up，再重复至少 3 次，并同时启用 K3
+CUDA Event，记录 prefill、decode、每步 MoE/attention 以及有效的 TTFT/TPOT。只有这样
+才能判断真实长文本 workload 下 decode 的内部时间分布是否仍为约 `65.8%/30.0%`。
+
+
+
+
+既然你说下一步应该做一次真正可比较的 workload 测试：
+
+    1. 同一 LongBench 样本先 warm-up；
+    2. 再重复执行 3 次以上；
+    3. 启用 K3 CUDA Event 插桩；
+    4. 修复或绕过 PP external-launcher 的 metrics 缺失；
+    5. 分别记录 prefill、decode 和每个 decode step 的 MoE/attention 时间。
+
+    这样才能回答“真实长文本 workload 下，decode 的内部时间分布是否仍然是 65.8%/30.0%”。
+
+新打开这段历史对话后，直接说：
+
+  继续之前暂停的 LongBench warm-up 对照测试。
+  请先检查三台节点是否仍有 runner 进程，再采集结果。
+
+  如果历史对话不可见，也可以在项目目录中重新开始，并让 Codex 先阅读：
+
+  process/v2_longbench_results.md
+  process/v2_decode_breakdown.md
+  process/v2_future.md
+  phase1/run_phase2_longbench.py
+
+  然后说明：
+
+  继续执行真实 LongBench workload：
+  warm-up 1 次，重复 3 次，开启 VLLM_K3_TIMING=1，
+  分析 prefill、decode、MoE/attention 时间分布。
+
+  当前关键状态和实验目标都已保存在项目文件中。
