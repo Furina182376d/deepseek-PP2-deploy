@@ -20,6 +20,16 @@ OUTPUT_LEN = int(os.environ.get("PP_OUTPUT_LEN", _BASE_OUTPUT_LEN))
 NUM_WARMUPS = int(os.environ.get("PP_NUM_WARMUPS", "1"))
 NUM_REPEATS = int(os.environ.get("PP_NUM_REPEATS", "1"))
 
+# Optional worker-side PyTorch CUDA profiler. Keep disabled for normal latency
+# runs; when set, the output directory must be an absolute path shared by the
+# node-local worker processes (for example /home/tjy/kimi_bench/moe_profile).
+TORCH_PROFILER_DIR = os.environ.get("PP_TORCH_PROFILER_DIR", "")
+TORCH_PROFILER_WARMUP_ITERS = int(os.environ.get("PP_PROFILE_WARMUP_ITERS", "2"))
+TORCH_PROFILER_ACTIVE_ITERS = int(os.environ.get("PP_PROFILE_ACTIVE_ITERS", "8"))
+TORCH_PROFILER_WAIT_ITERS = int(os.environ.get("PP_PROFILE_WAIT_ITERS", "0"))
+TORCH_PROFILER_ONLY = os.environ.get("PP_PROFILE_ONLY", "0") == "1"
+ENFORCE_EAGER = os.environ.get("PP_ENFORCE_EAGER", "0") == "1"
+
 # K3 专用: MAX_MODEL_LEN=32768, 32k 的 prompt 会放不下 256 个输出 token,
 # 所以 context 扫描止步 16384 (如需 32768 请把 MAX_MODEL_LEN 提到 65536,
 # 但要注意 KV cache 显存余量)
