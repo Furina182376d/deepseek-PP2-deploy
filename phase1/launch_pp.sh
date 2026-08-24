@@ -80,6 +80,8 @@ echo "Partition  : ${PP_LAYER_PARTITION:-31,31,31}"
 echo "Experiment : ${PP_EXPERIMENT_ID}"
 echo "Output len : ${PP_OUTPUT_LEN:-512}"
 echo "Max seqs   : ${PP_MAX_NUM_SEQS:-512}"
+echo "Warmups    : ${PP_NUM_WARMUPS:-1}"
+echo "Repeats    : ${PP_NUM_REPEATS:-1}"
 echo "K3 timing  : ${VLLM_K3_TIMING:-0}"
 echo "============================================"
 

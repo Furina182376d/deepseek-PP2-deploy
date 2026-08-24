@@ -128,6 +128,8 @@ if __name__ == "__main__":
             "gpu_memory_utilization": cfg.GPU_MEM_UTIL,
             "kv_cache_dtype": cfg.KV_CACHE_DTYPE,
             "output_len": cfg.OUTPUT_LEN,
+            "num_warmups": cfg.NUM_WARMUPS,
+            "num_repeats": cfg.NUM_REPEATS,
         }
         json_path = os.path.join(RESULTS_DIR, "full_results.json")
         with open(json_path, "w") as f:

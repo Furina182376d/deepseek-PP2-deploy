@@ -5,6 +5,7 @@ Results logging — CSV, JSON, and human-readable report.
 import csv
 import json
 import os
+import statistics
 import sys
 from datetime import datetime
 
@@ -35,7 +36,7 @@ def csv_path(tp: int) -> str:
 
 def csv_headers(tp: int) -> list[str]:
     cols = [
-        "tp", "context_length", "prompt_tokens", "output_tokens",
+        "tp", "repeat", "context_length", "prompt_tokens", "output_tokens",
         "ttft_ms", "prefill_ms", "prefill_tps", "decode_tps", "tpot_ms", "total_ms",
         "avg_gpu_mem_mb",
     ]
@@ -133,7 +134,7 @@ def write_report_and_summary(title: str = "TP=4 vs TP=8 对比",
         n_gpus = sum(1 for k in r if k.startswith("gpu") and k.endswith("_mem_mb"))
         gpu_str = "  ".join(f"GPU{i}: {r[f'gpu{i}_mem_mb']:.0f}MB" for i in range(n_gpus))
         lines.append(
-            f"TP={tp}  ctx={ctx:>5d}  |  "
+            f"TP={tp}  run={r.get('repeat', 1):>2d}  ctx={ctx:>5d}  |  "
             f"prompt={r['prompt_tokens']:>5d}tok  output={r['output_tokens']:>3d}tok  |  "
             f"TTFT={r['ttft_ms']:>7.1f}ms  "
             f"prefill={r['prefill_ms']:>7.1f}ms ({r['prefill_tps']:>8.0f} tok/s)  "
@@ -161,6 +162,28 @@ def write_report_and_summary(title: str = "TP=4 vs TP=8 对比",
             else:
                 parts.append(f"{'N/A':>50s}")
         lines.append(f"{ctx:>6d} | " + " | ".join(parts))
+
+    repeated_groups = {}
+    for r in ALL_RESULTS:
+        repeated_groups.setdefault((r["tp"], r["context_length"]), []).append(r)
+    if any(len(rows) > 1 for rows in repeated_groups.values()):
+        lines.append("")
+        lines.append("=" * 110)
+        lines.append("REPEATED TPOT SUMMARY")
+        lines.append("=" * 110)
+        lines.append(
+            f"{'TP':>12s} {'ctx':>6s} {'n':>3s} {'mean_ms':>9s} "
+            f"{'p50_ms':>9s} {'p95_ms':>9s} {'min_ms':>9s} {'max_ms':>9s}"
+        )
+        for (tp, ctx), rows in sorted(repeated_groups.items()):
+            values = sorted(float(row["tpot_ms"]) for row in rows)
+            p95 = values[round((len(values) - 1) * 0.95)]
+            lines.append(
+                f"{tp:>12s} {ctx:>6d} {len(values):>3d} "
+                f"{statistics.mean(values):>9.2f} "
+                f"{statistics.median(values):>9.2f} {p95:>9.2f} "
+                f"{min(values):>9.2f} {max(values):>9.2f}"
+            )
 
     def gpu_count(tp_val):
         r0 = by_key.get((tp_val, ctxs[0])) if ctxs else None

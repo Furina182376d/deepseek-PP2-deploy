@@ -168,10 +168,13 @@ def run_pp():
             )
 
     # ---- All ranks: warmup ----
-    llm.generate(
-        [make_prompt(cfg.CONTEXT_LENGTHS[0])],
-        SamplingParams(temperature=0, max_tokens=cfg.OUTPUT_LEN, ignore_eos=True),
-    )
+    for warmup_index in range(cfg.NUM_WARMUPS):
+        if cfg.IS_LEADER:
+            print(f"Warmup {warmup_index + 1}/{cfg.NUM_WARMUPS}")
+        llm.generate(
+            [make_prompt(cfg.CONTEXT_LENGTHS[0])],
+            SamplingParams(temperature=0, max_tokens=cfg.OUTPUT_LEN, ignore_eos=True),
+        )
 
     # ---- Leader: prepare result logging ----
     if cfg.IS_LEADER:
@@ -179,7 +182,7 @@ def run_pp():
         open_csv(tp=tp_per_pp)  # reuse same CSV column schema
 
         print(
-            f"\n{'ctx':>6s} | {'prompt_tok':>5s} {'out_tok':>3s} | "
+            f"\n{'run':>3s} {'ctx':>6s} | {'prompt_tok':>5s} {'out_tok':>3s} | "
             f"{'TTFT_ms':>8s} | {'prefill_t/s':>10s} | {'decode_t/s':>10s} | "
             f"{'total_ms':>8s} | {'GPU_avg_MB':>10s}"
         )
@@ -190,9 +193,11 @@ def run_pp():
         prompt = make_prompt(ctx_len)
         sp = SamplingParams(temperature=0, max_tokens=cfg.OUTPUT_LEN, ignore_eos=True)
 
-        result = _timed_generate(llm, prompt, sp, ctx_len)
+        for repeat_index in range(cfg.NUM_REPEATS):
+            result = _timed_generate(llm, prompt, sp, ctx_len)
 
-        if cfg.IS_LEADER:
+            if not cfg.IS_LEADER:
+                continue
             # GPU memory snapshot (leader's local GPUs)
             used, _ = gpu_mem(tp_per_pp)
             avg_mem = sum(used) / len(used)
@@ -203,7 +208,7 @@ def run_pp():
             total_ms = result["total_ms"]
 
             print(
-                f"{ctx_len:>6d} | "
+                f"{repeat_index + 1:>3d} {ctx_len:>6d} | "
                 f"{result['prompt_tok']:>5d} {result['out_tok']:>3d} | "
                 f"{ttft_ms:>8.1f} | {prefill_tps:>10.0f} | {decode_tps:>10.1f} | "
                 f"{total_ms:>8.0f} | {avg_mem:>10.0f}"
@@ -212,6 +217,7 @@ def run_pp():
             # Build result row (tagged with PP info via the tp field convention)
             row = {
                 "tp": f"PP{cfg.PP_SIZE}_TP{tp_per_pp}",
+                "repeat": repeat_index + 1,
                 "context_length": ctx_len,
                 "prompt_tokens": result["prompt_tok"],
                 "output_tokens": result["out_tok"],

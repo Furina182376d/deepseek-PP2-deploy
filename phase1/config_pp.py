@@ -15,9 +15,10 @@ from phase0.config import (  # noqa: F401 — re-export for convenience
     OUTPUT_LEN as _BASE_OUTPUT_LEN,
 )
 
-# Rebalance experiments can use the same 64-token decode window as the
-# original stage breakdown without changing the phase0 default workload.
+# PP experiments can override the decode window without changing phase0.
 OUTPUT_LEN = int(os.environ.get("PP_OUTPUT_LEN", _BASE_OUTPUT_LEN))
+NUM_WARMUPS = int(os.environ.get("PP_NUM_WARMUPS", "1"))
+NUM_REPEATS = int(os.environ.get("PP_NUM_REPEATS", "1"))
 
 # K3 专用: MAX_MODEL_LEN=32768, 32k 的 prompt 会放不下 256 个输出 token,
 # 所以 context 扫描止步 16384 (如需 32768 请把 MAX_MODEL_LEN 提到 65536,
@@ -86,6 +87,10 @@ def validate_config():
     errors = []
     if OUTPUT_LEN <= 1:
         errors.append(f"PP_OUTPUT_LEN must be greater than 1, got {OUTPUT_LEN}")
+    if NUM_WARMUPS < 0:
+        errors.append(f"PP_NUM_WARMUPS must be non-negative, got {NUM_WARMUPS}")
+    if NUM_REPEATS <= 0:
+        errors.append(f"PP_NUM_REPEATS must be positive, got {NUM_REPEATS}")
     if MAX_NUM_SEQS <= 0:
         errors.append(f"PP_MAX_NUM_SEQS must be positive, got {MAX_NUM_SEQS}")
     if LOCAL_WORLD_SIZE != TP_SIZE_PER_PP:
