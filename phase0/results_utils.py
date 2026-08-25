@@ -38,7 +38,7 @@ def csv_headers(tp: int) -> list[str]:
     cols = [
         "tp", "repeat", "context_length", "prompt_tokens", "output_tokens",
         "ttft_ms", "prefill_ms", "prefill_tps", "decode_tps", "tpot_ms", "total_ms",
-        "avg_gpu_mem_mb",
+        "avg_gpu_mem_mb", "batch_size", "batch_output_tps",
     ]
     cols += [f"gpu{i}_mem_mb" for i in range(tp)]
     return cols

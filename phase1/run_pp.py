@@ -85,6 +85,45 @@ def _timed_generate(llm: LLM, prompt: str, sp: SamplingParams, ctx_len: int):
     }
 
 
+def _timed_generate_batch(llm: LLM, prompts: list[str], sp: SamplingParams, ctx_len: int):
+    """Measure one continuous-batching request and report aggregate throughput."""
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    outputs = llm.generate(prompts, sp)
+    torch.cuda.synchronize()
+    total_ms = (time.perf_counter() - t0) * 1000
+
+    prompt_tok = sum(len(out.prompt_token_ids) for out in outputs)
+    out_tok = sum(len(out.outputs[0].token_ids) for out in outputs)
+    ttfts = []
+    tpots = []
+    for out in outputs:
+        metrics = out.metrics
+        if metrics and metrics.first_token_latency is not None:
+            ttfts.append(metrics.first_token_latency * 1000)
+        if (metrics and metrics.num_generation_tokens and metrics.num_generation_tokens > 1
+                and metrics.last_token_ts and metrics.first_token_ts):
+            tpots.append((metrics.last_token_ts - metrics.first_token_ts) * 1000 /
+                         (metrics.num_generation_tokens - 1))
+    ttft_ms = max(ttfts) if ttfts else 0.0
+    tpot_ms = sum(tpots) / len(tpots) if tpots else 0.0
+    decode_window_ms = max(total_ms - ttft_ms, 1.0)
+    batch_output_tps = out_tok / (decode_window_ms / 1000)
+    prefill_ms = max(0.0, ttft_ms - tpot_ms)
+    prefill_tps = prompt_tok / (prefill_ms / 1000) if prefill_ms > 0 else 0.0
+    return {
+        "prompt_tok": prompt_tok,
+        "out_tok": out_tok,
+        "total_ms": total_ms,
+        "ttft_ms": ttft_ms,
+        "tpot_ms": tpot_ms,
+        "decode_tps": 1000.0 / tpot_ms if tpot_ms else 0.0,
+        "batch_output_tps": batch_output_tps,
+        "prefill_ms": prefill_ms,
+        "prefill_tps": prefill_tps,
+    }
+
+
 def run_pp():
     """Main PP profiling entry point — called by every torchrun process."""
 
@@ -151,6 +190,9 @@ def run_pp():
         model=cfg.MODEL_PATH,
         pipeline_parallel_size=cfg.PP_SIZE,
         tensor_parallel_size=tp_per_pp,
+        prefill_context_parallel_size=cfg.PREFILL_CP_SIZE,
+        decode_context_parallel_size=cfg.DECODE_CP_SIZE,
+        enable_expert_parallel=cfg.ENABLE_EXPERT_PARALLEL,
         max_model_len=cfg.MAX_MODEL_LEN,
         # K3 含 Mamba 层, 默认 1024 > 单卡可容纳的 Mamba cache block 数 (900),
         # 必须显式降低, 否则 CUDA graph 捕获检查直接失败
@@ -193,13 +235,15 @@ def run_pp():
             )
 
     # ---- All ranks: warmup ----
-    for warmup_index in range(cfg.NUM_WARMUPS):
-        if cfg.IS_LEADER:
-            print(f"Warmup {warmup_index + 1}/{cfg.NUM_WARMUPS}")
-        llm.generate(
-            [make_prompt(cfg.CONTEXT_LENGTHS[0])],
-            SamplingParams(temperature=0, max_tokens=cfg.OUTPUT_LEN, ignore_eos=True),
-        )
+    # Warm each requested batch shape once so graph compilation is not included
+    # in the measured rows.
+    for batch_size in cfg.BATCH_SIZES:
+        prompts = [make_prompt(cfg.CONTEXT_LENGTHS[0]) for _ in range(batch_size)]
+        for warmup_index in range(cfg.NUM_WARMUPS):
+            if cfg.IS_LEADER:
+                print(f"Warmup batch={batch_size} {warmup_index + 1}/{cfg.NUM_WARMUPS}")
+            llm.generate(prompts, SamplingParams(temperature=0, max_tokens=cfg.OUTPUT_LEN,
+                                                 ignore_eos=True))
 
     # ---- Leader: prepare result logging ----
     if cfg.IS_LEADER:
@@ -207,9 +251,9 @@ def run_pp():
         open_csv(tp=tp_per_pp)  # reuse same CSV column schema
 
         print(
-            f"\n{'run':>3s} {'ctx':>6s} | {'prompt_tok':>5s} {'out_tok':>3s} | "
+            f"\n{'run':>3s} {'batch':>5s} {'ctx':>6s} | {'prompt_tok':>5s} {'out_tok':>5s} | "
             f"{'TTFT_ms':>8s} | {'prefill_t/s':>10s} | {'decode_t/s':>10s} | "
-            f"{'total_ms':>8s} | {'GPU_avg_MB':>10s}"
+            f"{'batch_t/s':>10s} {'total_ms':>8s} | {'GPU_avg_MB':>10s}"
         )
         print("-" * 85)
 
@@ -229,52 +273,59 @@ def run_pp():
             print("Worker CUDA profiler request complete")
 
     if not cfg.TORCH_PROFILER_ONLY:
-        for ctx_len in cfg.CONTEXT_LENGTHS:
-            prompt = make_prompt(ctx_len)
-            sp = SamplingParams(temperature=0, max_tokens=cfg.OUTPUT_LEN, ignore_eos=True)
+        for batch_size in cfg.BATCH_SIZES:
+            for ctx_len in cfg.CONTEXT_LENGTHS:
+                prompts = [make_prompt(ctx_len) for _ in range(batch_size)]
+                sp = SamplingParams(temperature=0, max_tokens=cfg.OUTPUT_LEN, ignore_eos=True)
 
-            for repeat_index in range(cfg.NUM_REPEATS):
-                result = _timed_generate(llm, prompt, sp, ctx_len)
+                for repeat_index in range(cfg.NUM_REPEATS):
+                    result = (_timed_generate(llm, prompts[0], sp, ctx_len)
+                              if batch_size == 1 else
+                              _timed_generate_batch(llm, prompts, sp, ctx_len))
 
-                if not cfg.IS_LEADER:
-                    continue
-                # GPU memory snapshot (leader's local GPUs)
-                used, _ = gpu_mem(tp_per_pp)
-                avg_mem = sum(used) / len(used)
+                    if not cfg.IS_LEADER:
+                        continue
+                    # GPU memory snapshot (leader's local GPUs)
+                    used, _ = gpu_mem(tp_per_pp)
+                    avg_mem = sum(used) / len(used)
 
-                ttft_ms = result["ttft_ms"]
-                prefill_tps = result["prefill_tps"]
-                decode_tps = result["decode_tps"]
-                total_ms = result["total_ms"]
+                    ttft_ms = result["ttft_ms"]
+                    prefill_tps = result["prefill_tps"]
+                    decode_tps = result["decode_tps"]
+                    total_ms = result["total_ms"]
 
-                print(
-                    f"{repeat_index + 1:>3d} {ctx_len:>6d} | "
-                    f"{result['prompt_tok']:>5d} {result['out_tok']:>3d} | "
-                    f"{ttft_ms:>8.1f} | {prefill_tps:>10.0f} | {decode_tps:>10.1f} | "
-                    f"{total_ms:>8.0f} | {avg_mem:>10.0f}"
-                )
+                    print(
+                        f"{repeat_index + 1:>3d} {batch_size:>5d} {ctx_len:>6d} | "
+                        f"{result['prompt_tok']:>5d} {result['out_tok']:>5d} | "
+                        f"{ttft_ms:>8.1f} | {prefill_tps:>10.0f} | "
+                        f"{decode_tps:>10.1f} | "
+                        f"{result.get('batch_output_tps', decode_tps):>10.1f} "
+                        f"{total_ms:>8.0f} | {avg_mem:>10.0f}"
+                    )
 
-                # Build result row (tagged with PP info via the tp field convention)
-                row = {
-                    "tp": f"PP{cfg.PP_SIZE}_TP{tp_per_pp}",
-                    "repeat": repeat_index + 1,
-                    "context_length": ctx_len,
-                    "prompt_tokens": result["prompt_tok"],
-                    "output_tokens": result["out_tok"],
-                    "ttft_ms": round(ttft_ms, 2),
-                    "prefill_ms": round(result["prefill_ms"], 2),
-                    "prefill_tps": round(prefill_tps, 1),
-                    "decode_tps": round(decode_tps, 1),
-                    "tpot_ms": round(result["tpot_ms"], 2),
-                    "total_ms": round(total_ms, 1),
-                    "avg_gpu_mem_mb": round(avg_mem, 1),
-                }
-                # Per-GPU memory columns (leader's local GPUs)
-                for i in range(tp_per_pp):
-                    row[f"gpu{i}_mem_mb"] = used[i]
+                    # Build result row (tagged with PP info via the tp field convention)
+                    row = {
+                        "tp": f"PP{cfg.PP_SIZE}_TP{tp_per_pp}_B{batch_size}",
+                        "repeat": repeat_index + 1,
+                        "context_length": ctx_len,
+                        "prompt_tokens": result["prompt_tok"],
+                        "output_tokens": result["out_tok"],
+                        "ttft_ms": round(ttft_ms, 2),
+                        "prefill_ms": round(result["prefill_ms"], 2),
+                        "prefill_tps": round(prefill_tps, 1),
+                        "decode_tps": round(decode_tps, 1),
+                        "tpot_ms": round(result["tpot_ms"], 2),
+                        "total_ms": round(total_ms, 1),
+                        "avg_gpu_mem_mb": round(avg_mem, 1),
+                        "batch_size": batch_size,
+                        "batch_output_tps": round(result.get("batch_output_tps", decode_tps), 2),
+                    }
+                    # Per-GPU memory columns (leader's local GPUs)
+                    for i in range(tp_per_pp):
+                        row[f"gpu{i}_mem_mb"] = used[i]
 
-                write_csv_row(row)
-                ALL_RESULTS.append(row)
+                    write_csv_row(row)
+                    ALL_RESULTS.append(row)
 
     # ---- Cleanup ----
     if cfg.IS_LEADER:

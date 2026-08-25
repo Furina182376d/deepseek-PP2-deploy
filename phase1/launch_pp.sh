@@ -20,7 +20,7 @@ PP_EXPERIMENT_ID="${3:-${PP_EXPERIMENT_ID:-baseline_31_31_31}}"
 MASTER_ADDR="192.168.0.224"
 MASTER_PORT=29500
 NNODES=3
-NPROC_PER_NODE=8   # one process per GPU — 8 H20s used per node
+NPROC_PER_NODE="${PP_TP_SIZE:-8}"   # one process per GPU in each PP stage
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONDA_BASE="${HOME}/miniconda3"
@@ -80,6 +80,9 @@ echo "Partition  : ${PP_LAYER_PARTITION:-31,31,31}"
 echo "Experiment : ${PP_EXPERIMENT_ID}"
 echo "Output len : ${PP_OUTPUT_LEN:-512}"
 echo "Max seqs   : ${PP_MAX_NUM_SEQS:-512}"
+echo "Batch sizes: ${PP_BATCH_SIZES:-${PP_BATCH_SIZE:-1}}"
+echo "CP prefill/decode: ${PP_PREFILL_CP_SIZE:-1}/${PP_DECODE_CP_SIZE:-1}"
+echo "Expert parallel: ${PP_ENABLE_EXPERT_PARALLEL:-0}"
 echo "Warmups    : ${PP_NUM_WARMUPS:-1}"
 echo "Repeats    : ${PP_NUM_REPEATS:-1}"
 echo "K3 timing  : ${VLLM_K3_TIMING:-0}"

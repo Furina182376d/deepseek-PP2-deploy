@@ -43,8 +43,17 @@ MODEL_PATH = "/data/models/Kimi-K3"
 
 # ---- PP / TP / multi-node ----
 PP_SIZE = 3
-TP_SIZE_PER_PP = 8         # each PP stage uses 8 GPUs on the node
+TP_SIZE_PER_PP = int(os.environ.get("PP_TP_SIZE", "8"))
 WORLD_SIZE_PP = PP_SIZE * TP_SIZE_PER_PP  # 24 — total workers across 3 nodes
+
+# vLLM context/expert parallel knobs.  CP partitions work within the TP group;
+# EP changes MoE expert placement while preserving the PP topology.
+PREFILL_CP_SIZE = int(os.environ.get("PP_PREFILL_CP_SIZE", "1"))
+DECODE_CP_SIZE = int(os.environ.get("PP_DECODE_CP_SIZE", "1"))
+ENABLE_EXPERT_PARALLEL = os.environ.get("PP_ENABLE_EXPERT_PARALLEL", "0") == "1"
+
+_BATCH_RAW = os.environ.get("PP_BATCH_SIZES", os.environ.get("PP_BATCH_SIZE", "1"))
+BATCH_SIZES = tuple(int(x) for x in _BATCH_RAW.split(",") if x.strip())
 
 # Optional non-uniform pipeline split. vLLM reads VLLM_PP_LAYER_PARTITION
 # before model construction; keep the parsed value here for validation and
@@ -81,7 +90,7 @@ ENABLE_FLASHINFER_AUTOTUNE = False
 # stage-1 节点显存只够 900 个 block, 而 vLLM 默认 max_num_seqs=1024, 会在
 # CUDA graph 捕获检查直接失败 (max_num_seqs exceeds available Mamba cache
 # blocks)。 profiling 每次只发 1 条序列, 512 足够且有安全余量。
-MAX_NUM_SEQS = int(os.environ.get("PP_MAX_NUM_SEQS", "512"))
+MAX_NUM_SEQS = int(os.environ.get("PP_MAX_NUM_SEQS", str(max(BATCH_SIZES))))
 
 # ---- torchrun supplies these via env vars ----
 GLOBAL_RANK = int(os.environ.get("RANK", 0))
@@ -103,6 +112,16 @@ def validate_config():
         errors.append(f"PP_NUM_REPEATS must be positive, got {NUM_REPEATS}")
     if MAX_NUM_SEQS <= 0:
         errors.append(f"PP_MAX_NUM_SEQS must be positive, got {MAX_NUM_SEQS}")
+    if not BATCH_SIZES or any(batch <= 0 for batch in BATCH_SIZES):
+        errors.append(f"PP_BATCH_SIZES must contain positive integers, got {BATCH_SIZES}")
+    if max(BATCH_SIZES) > MAX_NUM_SEQS:
+        errors.append(
+            f"max(PP_BATCH_SIZES)={max(BATCH_SIZES)} exceeds PP_MAX_NUM_SEQS={MAX_NUM_SEQS}"
+        )
+    for name, value in (("PP_PREFILL_CP_SIZE", PREFILL_CP_SIZE),
+                        ("PP_DECODE_CP_SIZE", DECODE_CP_SIZE)):
+        if value <= 0:
+            errors.append(f"{name} must be positive, got {value}")
     if LOCAL_WORLD_SIZE != TP_SIZE_PER_PP:
         errors.append(
             f"LOCAL_WORLD_SIZE={LOCAL_WORLD_SIZE} != TP_SIZE_PER_PP={TP_SIZE_PER_PP}"
