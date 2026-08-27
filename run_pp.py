@@ -26,6 +26,7 @@ if _PROJ not in sys.path:
 
 import phase1.config_pp as cfg
 from phase0.gpu_utils import gpu_mem
+from phase0.prompt_utils import make_prompt
 from phase0.results_utils import (
     ALL_RESULTS,
     close_csv,
@@ -33,50 +34,6 @@ from phase0.results_utils import (
     open_csv,
     write_csv_row,
 )
-from phase2.data_loader import list_available_datasets, load_longbench
-
-
-def _load_longbench_requests() -> list[dict]:
-    """Load the deterministic real-text requests used by the PP sweep."""
-    available = list_available_datasets()
-    requests: list[dict] = []
-    for task in cfg.LONG_BENCH_TASKS:
-        if available.get(task) != "local":
-            raise FileNotFoundError(
-                f"LongBench task '{task}' is unavailable on node {cfg.NODE_RANK}. "
-                "Install the same local dataset files on all three nodes."
-            )
-        items = load_longbench(task)
-        candidates = []
-        for item in items:
-            context = item.get("context", "") or item.get("input", "")
-            question = item.get("input", "") or item.get("question", "")
-            prompt = f"{context}\n\n{question}" if question else context
-            if prompt.strip() and len(prompt) <= cfg.LONG_BENCH_MAX_PROMPT_CHARS:
-                candidates.append((len(prompt), item, prompt))
-        candidates.sort(key=lambda value: value[0], reverse=True)
-        if len(candidates) < cfg.LONG_BENCH_SAMPLES:
-            raise ValueError(
-                f"LongBench task '{task}' has only {len(candidates)} samples "
-                f"within PP_LONG_BENCH_MAX_PROMPT_CHARS="
-                f"{cfg.LONG_BENCH_MAX_PROMPT_CHARS}, but "
-                f"PP_LONG_BENCH_SAMPLES={cfg.LONG_BENCH_SAMPLES}."
-            )
-        for sample_index, (_, item, prompt) in enumerate(
-            candidates[: cfg.LONG_BENCH_SAMPLES]
-        ):
-            requests.append(
-                {
-                    "task": task,
-                    "sample": item.get("_id", sample_index),
-                    "prompt": prompt,
-                    "prompt_chars": len(prompt),
-                    "dataset_length": item.get("length"),
-                }
-            )
-    if not requests:
-        raise ValueError("No LongBench requests were loaded")
-    return requests
 
 
 def _timed_generate(llm: LLM, prompt: str, sp: SamplingParams, ctx_len: int):
@@ -277,37 +234,16 @@ def run_pp():
                 f"({used_init[i] / total_init[i] * 100:.1f}%)"
             )
 
-    # ---- All ranks: load and warm up real LongBench requests ----
-    # Do not replace these with synthetic filler: the measured prompt is the
-    # actual context + question from the local LongBench records.
-    requests = _load_longbench_requests()
-    if cfg.IS_LEADER:
-        print(
-            "LongBench workload: "
-            f"tasks={','.join(cfg.LONG_BENCH_TASKS)} "
-            f"samples_per_task={cfg.LONG_BENCH_SAMPLES} "
-            f"requests={len(requests)} output_tokens={cfg.LONG_BENCH_OUTPUT} "
-            f"repeats={cfg.LONG_BENCH_REPEATS}"
-        )
-        for request in requests:
-            print(
-                f"  {request['task']}[{request['sample']}]: "
-                f"{len(request['prompt']):,} prompt characters"
-            )
-
-    sp = SamplingParams(
-        temperature=0,
-        max_tokens=cfg.LONG_BENCH_OUTPUT,
-        ignore_eos=True,
-    )
-    for warmup_index in range(cfg.NUM_WARMUPS):
-        if cfg.IS_LEADER:
-            print(
-                f"LongBench warmup {warmup_index + 1}/{cfg.NUM_WARMUPS} "
-                f"({len(requests)} requests)"
-            )
-        for request in requests:
-            llm.generate([request["prompt"]], sp)
+    # ---- All ranks: warmup ----
+    # Warm each requested batch shape once so graph compilation is not included
+    # in the measured rows.
+    for batch_size in cfg.BATCH_SIZES:
+        prompts = [make_prompt(cfg.CONTEXT_LENGTHS[0]) for _ in range(batch_size)]
+        for warmup_index in range(cfg.NUM_WARMUPS):
+            if cfg.IS_LEADER:
+                print(f"Warmup batch={batch_size} {warmup_index + 1}/{cfg.NUM_WARMUPS}")
+            llm.generate(prompts, SamplingParams(temperature=0, max_tokens=cfg.OUTPUT_LEN,
+                                                 ignore_eos=True))
 
     # ---- Leader: prepare result logging ----
     if cfg.IS_LEADER:
@@ -315,8 +251,7 @@ def run_pp():
         open_csv(tp=tp_per_pp)  # reuse same CSV column schema
 
         print(
-            f"\n{'run':>3s} {'task':>12s} {'ctx':>6s} | "
-            f"{'prompt_tok':>5s} {'out_tok':>5s} | "
+            f"\n{'run':>3s} {'batch':>5s} {'ctx':>6s} | {'prompt_tok':>5s} {'out_tok':>5s} | "
             f"{'TTFT_ms':>8s} | {'prefill_t/s':>10s} | {'decode_t/s':>10s} | "
             f"{'batch_t/s':>10s} {'total_ms':>8s} | {'GPU_avg_MB':>10s}"
         )
@@ -329,61 +264,68 @@ def run_pp():
         if cfg.IS_LEADER:
             print("Starting worker CUDA profiler request")
         llm.start_profile("moe_decode")
-        llm.generate([requests[0]["prompt"]], sp)
+        llm.generate(
+            [make_prompt(cfg.CONTEXT_LENGTHS[0])],
+            SamplingParams(temperature=0, max_tokens=cfg.OUTPUT_LEN, ignore_eos=True),
+        )
         llm.stop_profile()
         if cfg.IS_LEADER:
             print("Worker CUDA profiler request complete")
 
     if not cfg.TORCH_PROFILER_ONLY:
-        for request in requests:
-            for repeat_index in range(cfg.LONG_BENCH_REPEATS):
-                result = _timed_generate(llm, request["prompt"], sp, 0)
+        for batch_size in cfg.BATCH_SIZES:
+            for ctx_len in cfg.CONTEXT_LENGTHS:
+                prompts = [make_prompt(ctx_len) for _ in range(batch_size)]
+                sp = SamplingParams(temperature=0, max_tokens=cfg.OUTPUT_LEN, ignore_eos=True)
 
-                if not cfg.IS_LEADER:
-                    continue
-                # GPU memory snapshot (leader's local GPUs)
-                used, _ = gpu_mem(tp_per_pp)
-                avg_mem = sum(used) / len(used)
+                for repeat_index in range(cfg.NUM_REPEATS):
+                    result = (_timed_generate(llm, prompts[0], sp, ctx_len)
+                              if batch_size == 1 else
+                              _timed_generate_batch(llm, prompts, sp, ctx_len))
 
-                ttft_ms = result["ttft_ms"]
-                prefill_tps = result["prefill_tps"]
-                decode_tps = result["decode_tps"]
-                total_ms = result["total_ms"]
-                decode_window_ms = max(total_ms - ttft_ms, 1.0)
-                output_tps = result["out_tok"] / (decode_window_ms / 1000)
+                    if not cfg.IS_LEADER:
+                        continue
+                    # GPU memory snapshot (leader's local GPUs)
+                    used, _ = gpu_mem(tp_per_pp)
+                    avg_mem = sum(used) / len(used)
 
-                print(
-                    f"{repeat_index + 1:>3d} {request['task'][:12]:>12s} "
-                    f"{result['prompt_tok']:>6d} | "
-                    f"{result['prompt_tok']:>5d} {result['out_tok']:>5d} | "
-                    f"{ttft_ms:>8.1f} | {prefill_tps:>10.1f} | "
-                    f"{decode_tps:>10.1f} | {output_tps:>10.1f} "
-                    f"{total_ms:>8.0f} | {avg_mem:>10.0f}"
-                )
+                    ttft_ms = result["ttft_ms"]
+                    prefill_tps = result["prefill_tps"]
+                    decode_tps = result["decode_tps"]
+                    total_ms = result["total_ms"]
 
-                row = {
-                    "tp": f"PP{cfg.PP_SIZE}_TP{tp_per_pp}_B1",
-                    "task": request["task"],
-                    "sample": request["sample"],
-                    "repeat": repeat_index + 1,
-                    "context_length": result["prompt_tok"],
-                    "prompt_tokens": result["prompt_tok"],
-                    "output_tokens": result["out_tok"],
-                    "ttft_ms": round(ttft_ms, 2),
-                    "prefill_ms": round(result["prefill_ms"], 2),
-                    "prefill_tps": round(prefill_tps, 1),
-                    "decode_tps": round(decode_tps, 1),
-                    "tpot_ms": round(result["tpot_ms"], 2),
-                    "total_ms": round(total_ms, 1),
-                    "avg_gpu_mem_mb": round(avg_mem, 1),
-                    "batch_size": 1,
-                    "batch_output_tps": round(output_tps, 2),
-                }
-                for i in range(tp_per_pp):
-                    row[f"gpu{i}_mem_mb"] = used[i]
+                    print(
+                        f"{repeat_index + 1:>3d} {batch_size:>5d} {ctx_len:>6d} | "
+                        f"{result['prompt_tok']:>5d} {result['out_tok']:>5d} | "
+                        f"{ttft_ms:>8.1f} | {prefill_tps:>10.0f} | "
+                        f"{decode_tps:>10.1f} | "
+                        f"{result.get('batch_output_tps', decode_tps):>10.1f} "
+                        f"{total_ms:>8.0f} | {avg_mem:>10.0f}"
+                    )
 
-                write_csv_row(row)
-                ALL_RESULTS.append(row)
+                    # Build result row (tagged with PP info via the tp field convention)
+                    row = {
+                        "tp": f"PP{cfg.PP_SIZE}_TP{tp_per_pp}_B{batch_size}",
+                        "repeat": repeat_index + 1,
+                        "context_length": ctx_len,
+                        "prompt_tokens": result["prompt_tok"],
+                        "output_tokens": result["out_tok"],
+                        "ttft_ms": round(ttft_ms, 2),
+                        "prefill_ms": round(result["prefill_ms"], 2),
+                        "prefill_tps": round(prefill_tps, 1),
+                        "decode_tps": round(decode_tps, 1),
+                        "tpot_ms": round(result["tpot_ms"], 2),
+                        "total_ms": round(total_ms, 1),
+                        "avg_gpu_mem_mb": round(avg_mem, 1),
+                        "batch_size": batch_size,
+                        "batch_output_tps": round(result.get("batch_output_tps", decode_tps), 2),
+                    }
+                    # Per-GPU memory columns (leader's local GPUs)
+                    for i in range(tp_per_pp):
+                        row[f"gpu{i}_mem_mb"] = used[i]
+
+                    write_csv_row(row)
+                    ALL_RESULTS.append(row)
 
     # ---- Cleanup ----
     if cfg.IS_LEADER:

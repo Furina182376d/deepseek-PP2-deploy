@@ -27,15 +27,40 @@ cd /home/tjy/codebases/deepseek-PP2-deploy/phase1
 # aliyun3 (192.168.0.226):  ./launch_pp.sh 2
 ```
 
-运行流程：三机同时加载权重（页缓存热时 ~10 min，冷盘可能 2h）→ 全部 rank 就绪后
-leader 依次以 `CONTEXT_LENGTHS` 每个 context 长度发一个 256 输出 token 的请求 →
-结果写入 `results/`（CSV + `full_results.json` + report，仅 leader 本机）。
+运行流程：三机同时加载权重（页缓存热时 ~10 min，冷盘可能 2h）→ 全部 rank 就绪后，
+leader 使用真实 LongBench `qmsum/gov_report` 长文本请求进行 warmup 和重复测速 →
+结果写入 `phase0/profile_results/`（CSV + `full_results.json` + report，仅 leader 本机）。
+
+## EP/CP 顺序测速
+
+如果要在保持 `PP=3、TP=8` 的前提下依次测试 EP/CP 组合，可只在主节点
+（默认 `192.168.0.224`）运行：
+
+```bash
+./run_ep_cp_sweep.sh
+```
+
+脚本会通过 SSH 同时启动三台机器的 `launch_pp.sh`，等待一组完整结束后再运行下一组。
+测速请求来自本地 LongBench 的真实文本，不再使用合成 prompt：默认任务为 `qmsum` 和
+`gov_report`，每个任务选择一个在 32K 上限内最长的样本，生成 128 token，每个样本重复 3 次。
+当前安装的 vLLM 对 Kimi-K3 的 MultiHeadLatentAttention 明确不支持 context
+parallelism，因此 `DCP/PCP > 1` 会在模型初始化时失败；脚本默认只运行下面两组有效配置：
+
+```text
+TP=8 EP=0 DCP=1
+TP=8 EP=1 DCP=1
+```
+
+Prefill CP 和 decode CP 均固定为 1。每组的三节点日志保存在
+`sweep_results/<timestamp>/<experiment>/`；任一节点失败时脚本会停止后续测试。
+如主机地址或代码路径不同，可设置 `SWEEP_HOSTS`、`SWEEP_MASTER_HOST`、`SWEEP_REPO`
+和 `SWEEP_LOG_DIR` 覆盖默认值。
 
 ## 文件说明
 
 | 文件 | 作用 |
 |------|------|
-| `config_pp.py` | K3 专用常量：`MODEL_PATH=/data/models/Kimi-K3`、`PP_SIZE=3`、`TP_SIZE_PER_PP=8`、`NNODES=3`、`MASTER_ADDR=192.168.0.224`、`MAX_MODEL_LEN=32768`、`CONTEXT_LENGTHS=[512..16384]`；自动从 torchrun 环境变量检测 rank/is_leader；`validate_config()` 校验一致性 |
+| `config_pp.py` | K3 专用常量：`MODEL_PATH=/data/models/Kimi-K3`、`PP_SIZE=3`、`TP_SIZE_PER_PP=8`、`NNODES=3`、`MASTER_ADDR=192.168.0.224`、`MAX_MODEL_LEN=32768`；默认从 LongBench 加载 `qmsum/gov_report` 真实长文本；自动从 torchrun 环境变量检测 rank/is_leader；`validate_config()` 校验一致性 |
 | `run_pp.py` | PP 推理核心 — 每个 torchrun 进程创建 `LLM(pipeline_parallel_size=3, tensor_parallel_size=8, distributed_executor_backend="external_launcher", distributed_timeout_seconds=10800, cpu_distributed_timeout_seconds=10800, ...)`；指标采集 (TTFT/prefill_tps/decode_tps/tpot) 与 phase2/phase0 一致 |
 | `profile_dsv4_pp.py` | 入口脚本：vLLM 导入前安装 `comm_crypto` hooks（无 `VLLM_COMM_PSK` 时 no-op），调用 `run_pp()`；leader 写 `full_results.json` 与 report；失败时降级 `max_model_len=16384` 重试 |
 | `launch_pp.sh` | torchrun 启动包装：`./launch_pp.sh <0|1|2>`；NCCL TCP 环境变量（`NCCL_IB_DISABLE=1`、`NCCL_SOCKET_IFNAME=eth0`、`NCCL_CUMEM_HOST_ENABLE=0`）、`HF_HUB_OFFLINE=1`、`VLLM_ENABLE_V1_MULTIPROCESSING=0`；激活 `vllm` conda 环境 |

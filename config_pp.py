@@ -20,21 +20,6 @@ OUTPUT_LEN = int(os.environ.get("PP_OUTPUT_LEN", _BASE_OUTPUT_LEN))
 NUM_WARMUPS = int(os.environ.get("PP_NUM_WARMUPS", "1"))
 NUM_REPEATS = int(os.environ.get("PP_NUM_REPEATS", "1"))
 
-# Real long-context workload. Keep task/sample selection deterministic so EP
-# comparisons use exactly the same requests. The data files are resolved by
-# phase2.data_loader from the shared LongBench directories.
-LONG_BENCH_TASKS = tuple(
-    task.strip()
-    for task in os.environ.get("PP_LONG_BENCH_TASKS", "qmsum,gov_report").split(",")
-    if task.strip()
-)
-LONG_BENCH_SAMPLES = int(os.environ.get("PP_LONG_BENCH_SAMPLES", "1"))
-LONG_BENCH_OUTPUT = int(os.environ.get("PP_LONG_BENCH_OUTPUT", "128"))
-LONG_BENCH_REPEATS = int(os.environ.get("PP_LONG_BENCH_REPEATS", "3"))
-LONG_BENCH_MAX_PROMPT_CHARS = int(
-    os.environ.get("PP_LONG_BENCH_MAX_PROMPT_CHARS", "100000")
-)
-
 # Optional worker-side PyTorch CUDA profiler. Keep disabled for normal latency
 # runs; when set, the output directory must be an absolute path shared by the
 # node-local worker processes (for example /home/tjy/kimi_bench/moe_profile).
@@ -45,12 +30,13 @@ TORCH_PROFILER_WAIT_ITERS = int(os.environ.get("PP_PROFILE_WAIT_ITERS", "0"))
 TORCH_PROFILER_ONLY = os.environ.get("PP_PROFILE_ONLY", "0") == "1"
 ENFORCE_EAGER = os.environ.get("PP_ENFORCE_EAGER", "0") == "1"
 
-# K3 专用: MAX_MODEL_LEN=32768. LongBench samples are selected by real prompt
-# length and kept below 100k characters so their tokenized length plus output
-# fits within this limit.
-# Retained for compatibility with generic result consumers; actual context
-# lengths come from the tokenized LongBench records below.
-CONTEXT_LENGTHS = []
+# K3 专用: MAX_MODEL_LEN=32768, 32k 的 prompt 会放不下 256 个输出 token,
+# 所以 context 扫描止步 16384 (如需 32768 请把 MAX_MODEL_LEN 提到 65536,
+# 但要注意 KV cache 显存余量)
+# Decode-only observation run: single short context, so the dmon window is
+# almost entirely decode. Restore the full sweep afterwards:
+#   CONTEXT_LENGTHS = [512, 1024, 2048, 4096, 8192, 16384]
+CONTEXT_LENGTHS = [512]
 
 # ---- 模型 (三台机器均为 /data/models/Kimi-K3) ----
 MODEL_PATH = "/data/models/Kimi-K3"
@@ -124,19 +110,6 @@ def validate_config():
         errors.append(f"PP_NUM_WARMUPS must be non-negative, got {NUM_WARMUPS}")
     if NUM_REPEATS <= 0:
         errors.append(f"PP_NUM_REPEATS must be positive, got {NUM_REPEATS}")
-    if not LONG_BENCH_TASKS:
-        errors.append("PP_LONG_BENCH_TASKS must contain at least one task")
-    if LONG_BENCH_SAMPLES <= 0:
-        errors.append(f"PP_LONG_BENCH_SAMPLES must be positive, got {LONG_BENCH_SAMPLES}")
-    if LONG_BENCH_OUTPUT <= 0:
-        errors.append(f"PP_LONG_BENCH_OUTPUT must be positive, got {LONG_BENCH_OUTPUT}")
-    if LONG_BENCH_REPEATS <= 0:
-        errors.append(f"PP_LONG_BENCH_REPEATS must be positive, got {LONG_BENCH_REPEATS}")
-    if LONG_BENCH_MAX_PROMPT_CHARS <= 0:
-        errors.append(
-            "PP_LONG_BENCH_MAX_PROMPT_CHARS must be positive, got "
-            f"{LONG_BENCH_MAX_PROMPT_CHARS}"
-        )
     if MAX_NUM_SEQS <= 0:
         errors.append(f"PP_MAX_NUM_SEQS must be positive, got {MAX_NUM_SEQS}")
     if not BATCH_SIZES or any(batch <= 0 for batch in BATCH_SIZES):

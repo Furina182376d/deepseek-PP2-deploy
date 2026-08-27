@@ -131,15 +131,9 @@ if __name__ == "__main__":
             "max_num_seqs": cfg.MAX_NUM_SEQS,
             "gpu_memory_utilization": cfg.GPU_MEM_UTIL,
             "kv_cache_dtype": cfg.KV_CACHE_DTYPE,
-            "output_len": cfg.LONG_BENCH_OUTPUT,
+            "output_len": cfg.OUTPUT_LEN,
             "num_warmups": cfg.NUM_WARMUPS,
-            "num_repeats": cfg.LONG_BENCH_REPEATS,
-            "workload": "LongBench",
-            "longbench_tasks": cfg.LONG_BENCH_TASKS,
-            "longbench_samples_per_task": cfg.LONG_BENCH_SAMPLES,
-            "longbench_output_tokens": cfg.LONG_BENCH_OUTPUT,
-            "longbench_repeats": cfg.LONG_BENCH_REPEATS,
-            "longbench_max_prompt_chars": cfg.LONG_BENCH_MAX_PROMPT_CHARS,
+            "num_repeats": cfg.NUM_REPEATS,
         }
         json_path = os.path.join(RESULTS_DIR, "full_results.json")
         with open(json_path, "w") as f:
