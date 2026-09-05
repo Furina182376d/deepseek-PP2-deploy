@@ -43,7 +43,7 @@ BENCHMARK_TYPE = "longbench"
 BENCHMARK_DATA_DIR = "/home/tjy/benchmarks/longbench/data"
 # Empty means all standard (*.jsonl/*.json) files in BENCHMARK_DATA_DIR.
 BENCHMARK_TASKS: tuple[str, ...] = ("qmsum", "gov_report")
-MAX_SAMPLES_PER_TASK = 1
+MAX_SAMPLES_PER_TASK = 2
 
 # Custom prompt workload.  Change build_custom_prompt() for custom logic.
 CUSTOM_PROMPT_COUNT = 4
@@ -51,6 +51,9 @@ CUSTOM_PROMPT_COUNT = 4
 OUTPUT_TOKENS = 128
 NUM_WARMUPS = 1
 NUM_REPEATS = 3
+# Number of requests submitted to vLLM in one batch. Set to 1 for the
+# original single-stream measurement; 4 measures four concurrent streams.
+REQUEST_CONCURRENCY = 4
 MAX_MODEL_LEN = 200000
 MAX_NUM_SEQS = 16
 GPU_MEMORY_UTILIZATION = 0.95
@@ -130,6 +133,8 @@ def validate_config() -> None:
         errors.append("OUTPUT_TOKENS, MAX_MODEL_LEN and MAX_NUM_SEQS must be positive")
     if NUM_WARMUPS < 0 or NUM_REPEATS <= 0:
         errors.append("NUM_WARMUPS must be >= 0 and NUM_REPEATS must be positive")
+    if REQUEST_CONCURRENCY <= 0 or REQUEST_CONCURRENCY > MAX_NUM_SEQS:
+        errors.append("REQUEST_CONCURRENCY must be in [1, MAX_NUM_SEQS]")
     if not 0 < GPU_MEMORY_UTILIZATION <= 1:
         errors.append("GPU_MEMORY_UTILIZATION must be in (0, 1]")
     if BLOCK_SIZE <= 0:
@@ -277,6 +282,82 @@ def _run_request(
     }
 
 
+def _run_batch(
+    llm: Any,
+    batch: list[tuple[str, str, Any]],
+    torch: Any,
+) -> tuple[dict[str, tuple[Any, dict[str, float | int]]], dict[str, float | int]]:
+    """Submit and execute several requests concurrently through one engine."""
+    started = time.perf_counter()
+    for request_id, prompt, params in batch:
+        llm.llm_engine.add_request(request_id, prompt, params)
+
+    state: dict[str, dict[str, Any]] = {
+        request_id: {
+            "first_token_at": None,
+            "finished_at": None,
+            "finished_output": None,
+            "generated_tokens": 0,
+        }
+        for request_id, _, _ in batch
+    }
+    while llm.llm_engine.has_unfinished_requests():
+        step_outputs = llm.llm_engine.step()
+        step_finished_at = time.perf_counter()
+        for output in step_outputs:
+            request_id = str(getattr(output, "request_id", ""))
+            if request_id not in state:
+                continue
+            token_count = sum(
+                len(getattr(candidate, "token_ids", ()) or ())
+                for candidate in (getattr(output, "outputs", ()) or ())
+            )
+            item = state[request_id]
+            item["generated_tokens"] += token_count
+            if token_count and item["first_token_at"] is None:
+                item["first_token_at"] = step_finished_at
+            if getattr(output, "finished", False):
+                item["finished_output"] = output
+                item["finished_at"] = step_finished_at
+
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    batch_finished_at = time.perf_counter()
+    if any(item["finished_output"] is None for item in state.values()):
+        missing = [request_id for request_id, item in state.items() if item["finished_output"] is None]
+        raise RuntimeError(f"Requests did not finish: {', '.join(missing)}")
+
+    results: dict[str, tuple[Any, dict[str, float | int]]] = {}
+    first_tokens = [item["first_token_at"] for item in state.values() if item["first_token_at"] is not None]
+    batch_first_token_at = min(first_tokens) if first_tokens else batch_finished_at
+    total_decode_tokens = 0
+    for request_id, item in state.items():
+        first_token_at = item["first_token_at"] or item["finished_at"] or batch_finished_at
+        finished_at = item["finished_at"] or batch_finished_at
+        generated_tokens = int(item["generated_tokens"])
+        total_decode_tokens += max(generated_tokens - 1, 0)
+        results[request_id] = (
+            item["finished_output"],
+            {
+                "wall_elapsed_s": finished_at - started,
+                "wall_ttft_s": max(0.0, first_token_at - started),
+                "wall_decode_s": max(0.0, finished_at - first_token_at),
+                "wall_generated_tokens": generated_tokens,
+            },
+        )
+    return results, {
+        "batch_elapsed_s": batch_finished_at - started,
+        "batch_decode_s": max(0.0, batch_finished_at - batch_first_token_at),
+        "batch_decode_tokens": total_decode_tokens,
+        "batch_decode_tps": (
+            total_decode_tokens / (batch_finished_at - batch_first_token_at)
+            if batch_finished_at > batch_first_token_at
+            else 0.0
+        ),
+        "batch_concurrency": len(batch),
+    }
+
+
 def _request_metrics(
     output: Any,
     timing: dict[str, float | int],
@@ -351,7 +432,10 @@ def _create_results_dir(rank: dict[str, int | bool]) -> Path | None:
     return output_dir
 
 
-def _report_aggregate(request_rows: list[dict[str, Any]]) -> dict[str, float | int]:
+def _report_aggregate(
+    request_rows: list[dict[str, Any]],
+    batch_rows: list[dict[str, Any]] | None = None,
+) -> dict[str, float | int]:
     """Summarize completed requests, including end-to-end decode throughput."""
     if not request_rows:
         return {
@@ -366,6 +450,8 @@ def _report_aggregate(request_rows: list[dict[str, Any]]) -> dict[str, float | i
             "mean_tpot_ms": 0.0,
             "mean_decode_tps": 0.0,
             "aggregate_decode_tps": 0.0,
+            "request_sum_decode_tps": 0.0,
+            "completed_batches": 0,
         }
 
     count = len(request_rows)
@@ -375,6 +461,9 @@ def _report_aggregate(request_rows: list[dict[str, Any]]) -> dict[str, float | i
 
     total_decode_ms = total("decode_ms")
     total_decode_tokens = int(total("decode_tokens"))
+    batch_rows = batch_rows or []
+    batch_decode_tokens = sum(int(row.get("decode_tokens", 0) or 0) for row in batch_rows)
+    batch_decode_ms = sum(float(row.get("decode_ms", 0.0) or 0.0) for row in batch_rows)
     return {
         "completed_experiments": count,
         "total_prompt_tokens": int(total("prompt_tokens")),
@@ -387,7 +476,21 @@ def _report_aggregate(request_rows: list[dict[str, Any]]) -> dict[str, float | i
         "mean_tpot_ms": total("tpot_ms") / count,
         "mean_decode_tps": total("decode_tps") / count,
         # This is the throughput over all decode time, weighted by tokens.
+        # This remains the sum of per-request decode durations and is useful
+        # for comparing individual streams, but is not the concurrent rate.
+        "request_sum_decode_tps": (
+            total_decode_tokens / (total_decode_ms / 1000.0)
+            if total_decode_ms > 0
+            else 0.0
+        ),
+        "completed_batches": len(batch_rows),
+        # Concurrent throughput uses batch makespan, so each token is counted
+        # once and overlapping request times are not added together.
         "aggregate_decode_tps": (
+            batch_decode_tokens / (batch_decode_ms / 1000.0)
+            if batch_decode_ms > 0
+            else 0.0
+        ) if batch_rows else (
             total_decode_tokens / (total_decode_ms / 1000.0)
             if total_decode_ms > 0
             else 0.0
@@ -400,6 +503,7 @@ def _write_results(
     rank: dict[str, int | bool],
     output_dir: Path,
     status: str,
+    batch_rows: list[dict[str, Any]] | None = None,
 ) -> None:
     metadata = {
         "model": MODEL_PATH,
@@ -411,6 +515,7 @@ def _write_results(
         "nnodes": NNODES,
         "enable_expert_parallel": ENABLE_EXPERT_PARALLEL,
         "output_tokens": OUTPUT_TOKENS,
+        "request_concurrency": REQUEST_CONCURRENCY,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "rank": rank,
         "status": status,
@@ -425,7 +530,8 @@ def _write_results(
     # weighted decode throughput for the experiment so far.
     report_payload = {
         "metadata": metadata,
-        "aggregate": _report_aggregate(request_rows),
+        "aggregate": _report_aggregate(request_rows, batch_rows),
+        "batches": batch_rows or [],
         "results": request_rows,
     }
     (output_dir / "report.json").write_text(
@@ -510,63 +616,90 @@ def main() -> int:
     requests = load_requests()
     if bool(rank["is_leader"]):
         print(f"Loaded {len(requests)} benchmark requests")
+        if len(requests) < REQUEST_CONCURRENCY:
+            print(
+                f"Warning: only {len(requests)} requests loaded; "
+                f"effective concurrency is {len(requests)}, not {REQUEST_CONCURRENCY}",
+                flush=True,
+            )
 
     output_dir = _create_results_dir(rank)
     if dist.is_initialized():
         dist.barrier()
 
     for warmup_index in range(NUM_WARMUPS):
-        for request_index, request in enumerate(requests):
+        for batch_start in range(0, len(requests), REQUEST_CONCURRENCY):
+            request_batch = requests[batch_start : batch_start + REQUEST_CONCURRENCY]
+            batch = [
+                (
+                    f"warmup-{warmup_index}-{batch_start + offset}",
+                    request["prompt"],
+                    _sampling_params(SamplingParams, RequestOutputKind),
+                )
+                for offset, request in enumerate(request_batch)
+            ]
             if bool(rank["is_leader"]):
                 print(
                     f"Warmup {warmup_index + 1}/{NUM_WARMUPS}: "
-                    f"{request['task']} sample={request['sample']}",
+                    f"batch_size={len(batch)}",
                     flush=True,
                 )
-            params = _sampling_params(SamplingParams, RequestOutputKind)
-            _run_request(
-                llm,
-                request["prompt"],
-                params,
-                f"warmup-{warmup_index}-{request_index}",
-                torch,
-            )
+            _run_batch(llm, batch, torch)
 
     rows: list[dict[str, Any]] = []
-    for request in requests:
+    batch_rows: list[dict[str, Any]] = []
+    for batch_start in range(0, len(requests), REQUEST_CONCURRENCY):
+        request_batch = requests[batch_start : batch_start + REQUEST_CONCURRENCY]
         for repeat in range(NUM_REPEATS):
+            batch_id = f"batch-{batch_start // REQUEST_CONCURRENCY}-repeat-{repeat + 1}"
             if bool(rank["is_leader"]):
                 print(
-                    f"Running {request['task']} sample={request['sample']} "
-                    f"repeat={repeat + 1}/{NUM_REPEATS}",
+                    f"Running {batch_id} with {len(request_batch)} concurrent streams "
+                    f"({repeat + 1}/{NUM_REPEATS})",
                     flush=True,
                 )
-            params = _sampling_params(SamplingParams, RequestOutputKind)
-            output, timing = _run_request(
-                llm,
-                request["prompt"],
-                params,
-                f"benchmark-{request['task']}-{request['sample']}-{repeat}",
-                torch,
-            )
+            batch = [
+                (
+                    f"benchmark-{request['task']}-{request['sample']}-{repeat}",
+                    request["prompt"],
+                    _sampling_params(SamplingParams, RequestOutputKind),
+                )
+                for request in request_batch
+            ]
+            batch_results, batch_timing = _run_batch(llm, batch, torch)
             if not bool(rank["is_leader"]):
                 continue
-            metrics = _request_metrics(output, timing)
-            row = {
-                "task": request["task"],
-                "sample": request["sample"],
-                "repeat": repeat + 1,
-                **metrics,
-                "gpu_memory_mb": _gpu_memory(torch),
+            batch_row = {
+                "batch_id": batch_id,
+                "batch_size": len(request_batch),
+                "decode_tokens": int(batch_timing["batch_decode_tokens"]),
+                "decode_ms": float(batch_timing["batch_decode_s"]) * 1000,
+                "decode_tps": float(batch_timing["batch_decode_tps"]),
+                "elapsed_ms": float(batch_timing["batch_elapsed_s"]) * 1000,
             }
-            rows.append(row)
-            print(json.dumps(row, ensure_ascii=False), flush=True)
+            batch_rows.append(batch_row)
+            for request in request_batch:
+                request_id = f"benchmark-{request['task']}-{request['sample']}-{repeat}"
+                output, timing = batch_results[request_id]
+                metrics = _request_metrics(output, timing)
+                row = {
+                    "task": request["task"],
+                    "sample": request["sample"],
+                    "repeat": repeat + 1,
+                    "batch_id": batch_id,
+                    "batch_concurrency": len(request_batch),
+                    "batch_decode_tps": batch_row["decode_tps"],
+                    **metrics,
+                    "gpu_memory_mb": _gpu_memory(torch),
+                }
+                rows.append(row)
+                print(json.dumps(row, ensure_ascii=False), flush=True)
             assert output_dir is not None
-            _write_results(rows, rank, output_dir, status="in_progress")
+            _write_results(rows, rank, output_dir, status="in_progress", batch_rows=batch_rows)
 
     if bool(rank["is_leader"]):
         assert output_dir is not None
-        _write_results(rows, rank, output_dir, status="completed")
+        _write_results(rows, rank, output_dir, status="completed", batch_rows=batch_rows)
     return 0
 
 

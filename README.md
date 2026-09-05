@@ -17,6 +17,7 @@
 - `OUTPUT_TOKENS`：每个请求的最大输出 token 数。
 - `NUM_WARMUPS`：正式计时前的 warmup 次数。
 - `NUM_REPEATS`：每个样本的正式重复次数。
+- `REQUEST_CONCURRENCY`：每批同时提交的请求数。设为 `1` 测单流，设为 `4` 测四流并行；实际批大小不会超过已加载请求数。
 - `ENABLE_EXPERT_PARALLEL`：是否开启 expert parallel（EP）。
 - `KV_CACHE_DTYPE`：KV cache 数据类型，例如 `"fp8"`。
 - `BLOCK_SIZE`、`MAX_MODEL_LEN`、`MAX_NUM_SEQS`、`GPU_MEMORY_UTILIZATION`：vLLM 资源和长度配置。
@@ -117,12 +118,13 @@ conda 环境内。
 rank 0 会把结果写入 `results/<UTC timestamp>/`，包含：
 
 - `summary.json`：运行配置和完整结果。
-- `report.json`：与 summary 同步更新的实验报告，包含当前已完成 repeat 的聚合指标，尤其是 `aggregate_decode_tps`。
+- `report.json`：与 summary 同步更新的实验报告，包含当前已完成 batch 的聚合指标，尤其是 `aggregate_decode_tps`。
 - `requests.csv`：每个任务、样本和重复运行的延迟、吞吐及显存指标。
 
-每个正式 repeat 完成后都会立即刷新这三个文件，因此中途终止时仍可查看已完成部分。
-`decode_tps` 按 `(生成 token 数 - 1) / decode 时间` 计算；`aggregate_decode_tps` 是所有已完成请求的
-`total_decode_tokens / total_decode_time`，单位均为 token/s。离线 engine 不提供有效时间戳时，
+每个正式 batch 完成后都会立即刷新这三个文件，因此中途终止时仍可查看已完成部分。
+`decode_tps` 按 `(生成 token 数 - 1) / decode 时间` 计算；`aggregate_decode_tps` 是并发 batch 的
+`total_decode_tokens / batch_decode_time`，单位均为 token/s；每个请求还会记录 `batch_decode_tps`。
+`request_sum_decode_tps` 按请求 decode 时间相加，是串行口径，不代表并发总吞吐。离线 engine 不提供有效时间戳时，
 报告中的 `timing_source` 为 `step_wall_clock`，TTFT、TPOT 和 decode 吞吐均来自逐 step 的 wall-clock
 观测，而不是错误地记为 0。
 
