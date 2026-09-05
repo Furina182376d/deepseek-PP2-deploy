@@ -117,7 +117,14 @@ conda 环境内。
 rank 0 会把结果写入 `results/<UTC timestamp>/`，包含：
 
 - `summary.json`：运行配置和完整结果。
+- `report.json`：与 summary 同步更新的实验报告，包含当前已完成 repeat 的聚合指标，尤其是 `aggregate_decode_tps`。
 - `requests.csv`：每个任务、样本和重复运行的延迟、吞吐及显存指标。
+
+每个正式 repeat 完成后都会立即刷新这三个文件，因此中途终止时仍可查看已完成部分。
+`decode_tps` 按 `(生成 token 数 - 1) / decode 时间` 计算；`aggregate_decode_tps` 是所有已完成请求的
+`total_decode_tokens / total_decode_time`，单位均为 token/s。离线 engine 不提供有效时间戳时，
+报告中的 `timing_source` 为 `step_wall_clock`，TTFT、TPOT 和 decode 吞吐均来自逐 step 的 wall-clock
+观测，而不是错误地记为 0。
 
 真实模型启动前，可以先运行以下检查：
 

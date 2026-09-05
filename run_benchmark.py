@@ -214,33 +214,121 @@ def load_requests() -> list[dict[str, Any]]:
     return requests
 
 
-def _sampling_params(SamplingParams: Any) -> Any:
-    return SamplingParams(temperature=0, max_tokens=OUTPUT_TOKENS, ignore_eos=True)
+def _sampling_params(SamplingParams: Any, RequestOutputKind: Any) -> Any:
+    # DELTA output lets the offline runner observe the first and last token
+    # boundaries instead of receiving only one final aggregate output.
+    return SamplingParams(
+        temperature=0,
+        max_tokens=OUTPUT_TOKENS,
+        ignore_eos=True,
+        output_kind=RequestOutputKind.DELTA,
+    )
 
 
-def _request_metrics(output: Any, elapsed_s: float) -> dict[str, float | int]:
+def _run_request(
+    llm: Any,
+    prompt: str,
+    params: Any,
+    request_id: str,
+    torch: Any,
+) -> tuple[Any, dict[str, float | int]]:
+    """Run one request while observing token emission boundaries.
+
+    ``LLM.generate`` intentionally hides intermediate outputs. Driving the
+    engine directly is supported by vLLM's offline API and gives us reliable
+    wall-clock TTFT/decode boundaries even when RequestOutput.metrics is not
+    populated by a particular vLLM build.
+    """
+    started = time.perf_counter()
+    # Start before add_request so tokenization, queueing and the first engine
+    # step are included in the observed time-to-first-token.
+    llm.llm_engine.add_request(request_id, prompt, params)
+    first_token_at: float | None = None
+    finished_output: Any | None = None
+    generated_tokens = 0
+
+    while llm.llm_engine.has_unfinished_requests():
+        step_outputs = llm.llm_engine.step()
+        step_finished_at = time.perf_counter()
+        for output in step_outputs:
+            token_count = sum(
+                len(getattr(candidate, "token_ids", ()) or ())
+                for candidate in (getattr(output, "outputs", ()) or ())
+            )
+            generated_tokens += token_count
+            if token_count and first_token_at is None:
+                first_token_at = step_finished_at
+            if getattr(output, "finished", False):
+                finished_output = output
+
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    finished_at = time.perf_counter()
+    if finished_output is None:
+        raise RuntimeError(f"Request did not produce a finished output: {request_id}")
+
+    if first_token_at is None:
+        first_token_at = finished_at
+    return finished_output, {
+        "wall_elapsed_s": finished_at - started,
+        "wall_ttft_s": max(0.0, first_token_at - started),
+        "wall_decode_s": max(0.0, finished_at - first_token_at),
+        "wall_generated_tokens": generated_tokens,
+    }
+
+
+def _request_metrics(
+    output: Any,
+    timing: dict[str, float | int],
+) -> dict[str, float | int | str]:
     prompt_tokens = len(getattr(output, "prompt_token_ids", []) or [])
     candidates = getattr(output, "outputs", []) or []
     output_tokens = len(getattr(candidates[0], "token_ids", []) or []) if candidates else 0
     metrics = getattr(output, "metrics", None)
-    first_latency = getattr(metrics, "first_token_latency", None) if metrics else None
-    first_ts = getattr(metrics, "first_token_ts", None) if metrics else None
-    last_ts = getattr(metrics, "last_token_ts", None) if metrics else None
-    generated = int(getattr(metrics, "num_generation_tokens", output_tokens) or output_tokens)
-    if first_ts is not None and last_ts is not None and generated > 1:
-        tpot_s = max(0.0, (last_ts - first_ts) / (generated - 1))
+    generated = int(
+        timing.get("wall_generated_tokens", 0)
+        or getattr(metrics, "num_generation_tokens", 0)
+        or output_tokens
+    )
+
+    # Prefer vLLM's engine timestamps when they are non-zero. The direct
+    # step-wall-clock values are the fallback for offline builds that return
+    # a metrics object with zeroed timestamps.
+    first_latency = float(getattr(metrics, "first_token_latency", 0.0) or 0.0)
+    first_ts = float(getattr(metrics, "first_token_ts", 0.0) or 0.0)
+    last_ts = float(getattr(metrics, "last_token_ts", 0.0) or 0.0)
+    scheduled_ts = float(getattr(metrics, "scheduled_ts", 0.0) or 0.0)
+    engine_timing_valid = (
+        first_latency > 0.0
+        and first_ts > 0.0
+        and last_ts > first_ts
+        and generated > 0
+    )
+    if engine_timing_valid:
+        ttft_s = first_latency
+        prefill_s = max(0.0, first_ts - scheduled_ts) if scheduled_ts > 0 else ttft_s
+        decode_s = max(0.0, last_ts - first_ts)
+        timing_source = "vllm_engine_metrics"
     else:
-        tpot_s = 0.0
-    ttft_s = float(first_latency or 0.0)
-    prefill_s = max(0.0, ttft_s - tpot_s)
+        ttft_s = float(timing["wall_ttft_s"])
+        prefill_s = ttft_s
+        decode_s = float(timing["wall_decode_s"])
+        timing_source = "step_wall_clock"
+
+    decode_tokens = max(generated - 1, 0)
+    tpot_s = decode_s / decode_tokens if decode_tokens > 0 and decode_s > 0 else 0.0
     return {
         "prompt_tokens": prompt_tokens,
-        "output_tokens": output_tokens,
-        "elapsed_ms": elapsed_s * 1000,
+        "output_tokens": generated,
+        "elapsed_ms": float(timing["wall_elapsed_s"]) * 1000,
         "ttft_ms": ttft_s * 1000,
+        "prefill_ms": prefill_s * 1000,
+        "decode_ms": decode_s * 1000,
         "tpot_ms": tpot_s * 1000,
         "prefill_tps": prompt_tokens / prefill_s if prefill_s > 0 else 0.0,
-        "decode_tps": 1.0 / tpot_s if tpot_s > 0 else 0.0,
+        "decode_tps": decode_tokens / decode_s if decode_s > 0 else 0.0,
+        "decode_tokens": decode_tokens,
+        "timing_source": timing_source,
     }
 
 
@@ -254,10 +342,65 @@ def _gpu_memory(torch: Any) -> list[float]:
     return memory
 
 
-def _write_results(request_rows: list[dict[str, Any]], rank: dict[str, int | bool]) -> None:
+def _create_results_dir(rank: dict[str, int | bool]) -> Path | None:
+    if not bool(rank["is_leader"]):
+        return None
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     output_dir = Path(RESULTS_DIR) / timestamp
     output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
+
+
+def _report_aggregate(request_rows: list[dict[str, Any]]) -> dict[str, float | int]:
+    """Summarize completed requests, including end-to-end decode throughput."""
+    if not request_rows:
+        return {
+            "completed_experiments": 0,
+            "total_prompt_tokens": 0,
+            "total_output_tokens": 0,
+            "total_decode_tokens": 0,
+            "total_elapsed_ms": 0.0,
+            "total_decode_ms": 0.0,
+            "mean_elapsed_ms": 0.0,
+            "mean_ttft_ms": 0.0,
+            "mean_tpot_ms": 0.0,
+            "mean_decode_tps": 0.0,
+            "aggregate_decode_tps": 0.0,
+        }
+
+    count = len(request_rows)
+
+    def total(name: str) -> float:
+        return sum(float(row.get(name, 0.0) or 0.0) for row in request_rows)
+
+    total_decode_ms = total("decode_ms")
+    total_decode_tokens = int(total("decode_tokens"))
+    return {
+        "completed_experiments": count,
+        "total_prompt_tokens": int(total("prompt_tokens")),
+        "total_output_tokens": int(total("output_tokens")),
+        "total_decode_tokens": total_decode_tokens,
+        "total_elapsed_ms": total("elapsed_ms"),
+        "total_decode_ms": total_decode_ms,
+        "mean_elapsed_ms": total("elapsed_ms") / count,
+        "mean_ttft_ms": total("ttft_ms") / count,
+        "mean_tpot_ms": total("tpot_ms") / count,
+        "mean_decode_tps": total("decode_tps") / count,
+        # This is the throughput over all decode time, weighted by tokens.
+        "aggregate_decode_tps": (
+            total_decode_tokens / (total_decode_ms / 1000.0)
+            if total_decode_ms > 0
+            else 0.0
+        ),
+    }
+
+
+def _write_results(
+    request_rows: list[dict[str, Any]],
+    rank: dict[str, int | bool],
+    output_dir: Path,
+    status: str,
+) -> None:
     metadata = {
         "model": MODEL_PATH,
         "benchmark_type": BENCHMARK_TYPE,
@@ -270,9 +413,23 @@ def _write_results(request_rows: list[dict[str, Any]], rank: dict[str, int | boo
         "output_tokens": OUTPUT_TOKENS,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "rank": rank,
+        "status": status,
+        "completed_experiments": len(request_rows),
     }
+    summary_payload = {"metadata": metadata, "results": request_rows}
     (output_dir / "summary.json").write_text(
-        json.dumps({"metadata": metadata, "results": request_rows}, indent=2),
+        json.dumps(summary_payload, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    # report.json is updated after every completed repeat and exposes a
+    # weighted decode throughput for the experiment so far.
+    report_payload = {
+        "metadata": metadata,
+        "aggregate": _report_aggregate(request_rows),
+        "results": request_rows,
+    }
+    (output_dir / "report.json").write_text(
+        json.dumps(report_payload, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
     if request_rows:
@@ -281,7 +438,11 @@ def _write_results(request_rows: list[dict[str, Any]], rank: dict[str, int | boo
             writer = csv.DictWriter(stream, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(request_rows)
-    print(f"Results written to {output_dir}")
+    print(
+        f"Report updated: {output_dir} "
+        f"({len(request_rows)} completed experiments, status={status})",
+        flush=True,
+    )
 
 
 def main() -> int:
@@ -302,6 +463,7 @@ def main() -> int:
     import torch
     import torch.distributed as dist
     from vllm import LLM, SamplingParams
+    from vllm.sampling_params import RequestOutputKind
 
     model_dir = Path(MODEL_PATH)
     if not model_dir.is_dir():
@@ -346,26 +508,50 @@ def main() -> int:
         dist.barrier()
 
     requests = load_requests()
-    params = _sampling_params(SamplingParams)
     if bool(rank["is_leader"]):
         print(f"Loaded {len(requests)} benchmark requests")
-    for _ in range(NUM_WARMUPS):
-        for request in requests:
-            llm.generate([request["prompt"]], params, use_tqdm=False)
+
+    output_dir = _create_results_dir(rank)
+    if dist.is_initialized():
+        dist.barrier()
+
+    for warmup_index in range(NUM_WARMUPS):
+        for request_index, request in enumerate(requests):
+            if bool(rank["is_leader"]):
+                print(
+                    f"Warmup {warmup_index + 1}/{NUM_WARMUPS}: "
+                    f"{request['task']} sample={request['sample']}",
+                    flush=True,
+                )
+            params = _sampling_params(SamplingParams, RequestOutputKind)
+            _run_request(
+                llm,
+                request["prompt"],
+                params,
+                f"warmup-{warmup_index}-{request_index}",
+                torch,
+            )
 
     rows: list[dict[str, Any]] = []
     for request in requests:
         for repeat in range(NUM_REPEATS):
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
-            started = time.perf_counter()
-            outputs = llm.generate([request["prompt"]], params, use_tqdm=False)
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
-            elapsed = time.perf_counter() - started
+            if bool(rank["is_leader"]):
+                print(
+                    f"Running {request['task']} sample={request['sample']} "
+                    f"repeat={repeat + 1}/{NUM_REPEATS}",
+                    flush=True,
+                )
+            params = _sampling_params(SamplingParams, RequestOutputKind)
+            output, timing = _run_request(
+                llm,
+                request["prompt"],
+                params,
+                f"benchmark-{request['task']}-{request['sample']}-{repeat}",
+                torch,
+            )
             if not bool(rank["is_leader"]):
                 continue
-            metrics = _request_metrics(outputs[0], elapsed)
+            metrics = _request_metrics(output, timing)
             row = {
                 "task": request["task"],
                 "sample": request["sample"],
@@ -375,9 +561,12 @@ def main() -> int:
             }
             rows.append(row)
             print(json.dumps(row, ensure_ascii=False), flush=True)
+            assert output_dir is not None
+            _write_results(rows, rank, output_dir, status="in_progress")
 
     if bool(rank["is_leader"]):
-        _write_results(rows, rank)
+        assert output_dir is not None
+        _write_results(rows, rank, output_dir, status="completed")
     return 0
 
 
