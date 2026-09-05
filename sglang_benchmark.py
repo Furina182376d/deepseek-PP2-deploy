@@ -203,6 +203,12 @@ def wait_for_server() -> str:
     deadline = time.monotonic() + REQUEST_TIMEOUT_SECONDS
     last_error = "not attempted"
     while time.monotonic() < deadline:
+        worker_pid = os.environ.get("SGLANG_SERVER_PID")
+        if worker_pid and not _worker_alive(worker_pid):
+            raise RuntimeError(
+                f"SGLang worker process {worker_pid} exited before the HTTP endpoint became ready; "
+                "see the node log for the original error"
+            )
         try:
             models = _http_json(f"{_endpoint()}/v1/models")
             data = models.get("data") or []
@@ -213,6 +219,20 @@ def wait_for_server() -> str:
             last_error = str(exc)
         time.sleep(2)
     raise RuntimeError(f"SGLang endpoint did not become ready: {last_error}")
+
+
+def _worker_alive(pid_text: str) -> bool:
+    """Return false for a missing or already-reaped worker process."""
+    try:
+        pid = int(pid_text)
+        os.kill(pid, 0)
+    except (ValueError, ProcessLookupError, PermissionError):
+        return False
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").split()[2]
+    except (FileNotFoundError, OSError, IndexError):
+        return False
+    return state != "Z"
 
 
 def _stream_request(
@@ -505,13 +525,40 @@ def _build_serve_args(node_rank: int) -> list[str]:
     return args
 
 
+def _validate_model_compatibility() -> None:
+    """Fail before forking distributed workers when HF cannot parse the model."""
+    config_path = Path(MODEL_PATH) / "config.json"
+    if not config_path.is_file():
+        return
+    try:
+        from transformers import AutoConfig
+        AutoConfig.from_pretrained(
+            MODEL_PATH,
+            trust_remote_code=TRUST_REMOTE_CODE,
+            local_files_only=True,
+        )
+    except Exception as exc:
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            model_type = config.get("model_type", "unknown")
+        except Exception:
+            model_type = "unknown"
+        raise RuntimeError(
+            f"Model {MODEL_PATH} (model_type={model_type!r}) is not loadable by the installed "
+            "Transformers/SGLang stack. Install a SGLang build with this architecture, or use "
+            "a compatible checkpoint. Original error: " + str(exc)
+        ) from exc
+
+
 def validate_serve(node_rank: int) -> int:
+    _validate_model_compatibility()
     args = _build_serve_args(node_rank)
     print("SGLang serve preflight passed: " + " ".join(args), flush=True)
     return 0
 
 
 def serve(node_rank: int) -> int:
+    _validate_model_compatibility()
     args = _build_serve_args(node_rank)
     print("Starting: " + " ".join(args), flush=True)
     os.execvp(args[0], args)

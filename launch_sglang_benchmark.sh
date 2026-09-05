@@ -63,6 +63,7 @@ LOG_FILE="${SGLANG_LOG_FILE:-/tmp/sglang_benchmark_node${NODE_RANK}.log}"
 echo "Starting SGLang node ${NODE_RANK}; log: ${LOG_FILE}"
 setsid "${PYTHON_BIN}" sglang_benchmark.py serve "${NODE_RANK}" >"${LOG_FILE}" 2>&1 &
 SERVER_PID=$!
+export SGLANG_SERVER_PID="${SERVER_PID}"
 
 cleanup() {
     if kill -0 "${SERVER_PID}" 2>/dev/null; then
@@ -75,6 +76,9 @@ trap cleanup EXIT INT TERM
 if (( NODE_RANK == 0 )); then
     # The root node owns the HTTP endpoint and executes the benchmark after it
     # becomes ready. Ending this process also ends the distributed job.
+    if [[ -z "${SGLANG_BENCHMARK_OUTPUT_DIR:-}" ]]; then
+        export SGLANG_BENCHMARK_OUTPUT_DIR="results/sglang_$(date -u +%Y%m%d_%H%M%S)"
+    fi
     "${PYTHON_BIN}" sglang_benchmark.py benchmark
 else
     # A non-root node has no benchmark client. Once it has observed the root
