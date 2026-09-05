@@ -452,6 +452,14 @@ def _serve_help() -> str:
         raise RuntimeError("sglang command was not found in the activated environment") from exc
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError("timed out while reading 'sglang serve --help'") from exc
+    if result.returncode != 0:
+        details = result.stdout.strip() if result.stdout else "no diagnostic output"
+        if len(details) > 4000:
+            details = "... (SGLang CLI output truncated) ...\n" + details[-4000:]
+        raise RuntimeError(
+            "SGLang CLI help failed with exit status "
+            f"{result.returncode}: {details}"
+        )
     if not result.stdout:
         raise RuntimeError(f"could not read SGLang CLI help (exit status {result.returncode})")
     return result.stdout

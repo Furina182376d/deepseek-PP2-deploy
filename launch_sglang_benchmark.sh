@@ -49,6 +49,19 @@ export NCCL_CUMEM_HOST_ENABLE="${NCCL_CUMEM_HOST_ENABLE:-0}"
 export NCCL_ASYNC_ERROR_HANDLING="${NCCL_ASYNC_ERROR_HANDLING:-1}"
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+# The current image may ship a FlashInfer Python package newer than its
+# precompiled cubin package. Keep the launcher usable in that image while
+# allowing strict dependency validation with FLASHINFER_DISABLE_VERSION_CHECK=0.
+FLASHINFER_DISABLE_VERSION_CHECK="${FLASHINFER_DISABLE_VERSION_CHECK:-1}"
+if [[ "${FLASHINFER_DISABLE_VERSION_CHECK}" == "1" ]]; then
+    export FLASHINFER_DISABLE_VERSION_CHECK
+    echo "Warning: FlashInfer cubin version checking is disabled; install matching" >&2
+    echo "flashinfer and flashinfer-cubin versions for a strict production setup." >&2
+else
+    # FlashInfer checks only whether this variable is present, so exporting
+    # the string "0" would unexpectedly keep the check disabled.
+    unset FLASHINFER_DISABLE_VERSION_CHECK
+fi
 # Keep FlashInfer JIT artifacts writable even when the launcher runs from a
 # service account with a read-only home-directory cache.
 export FLASHINFER_WORKSPACE_BASE="${FLASHINFER_WORKSPACE_BASE:-/tmp/sglang_flashinfer_workspace}"

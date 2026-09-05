@@ -51,6 +51,20 @@ SPECULATIVE_ALGORITHM = None
 没有列出 DSPARK（仅列出 `EAGLE`、`EAGLE3`、`NEXTN`、`STANDALONE` 和
 `NGRAM`），因此 DSPARK 需要两台流水线节点都安装支持该算法的匹配版本。
 
+启动脚本默认设置 `FLASHINFER_DISABLE_VERSION_CHECK=1`，用于兼容镜像中
+`flashinfer` 与预编译 `flashinfer-cubin` 版本暂时不一致的情况；启动时会
+打印警告。长期运行或发布环境应在两台节点安装相同版本后，用
+`FLASHINFER_DISABLE_VERSION_CHECK=0 ./launch_sglang_benchmark.sh <node_rank>`
+启用严格校验。
+
+对于当前 `flashinfer_python==0.6.18` 环境，匹配 cubin 可用以下命令安装
+（两台节点都执行）：
+
+```bash
+python -m pip install --upgrade --no-deps --index-url https://flashinfer.ai/whl \
+  flashinfer-cubin==0.6.18
+```
+
 目前已检查的节点都包含 `/data/models/DeepSeek-V4-Pro-DSpark`；因此默认的
 `MODEL_PATH` 使用该本地目录。如果每台流水线节点上都存在该目录，也可以只
 修改 `MODEL_PATH` 来选择参考路径 `DeepSeek-V4-Pro-0813`。
