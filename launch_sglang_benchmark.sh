@@ -112,4 +112,16 @@ else
         fi
         sleep 5
     done
+    # Surface an early worker failure instead of silently returning to the
+    # shell while rank 0 waits for a peer that can no longer join.
+    if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
+        set +e
+        wait "${SERVER_PID}"
+        worker_status=$?
+        set -e
+        echo "SGLang worker on node ${NODE_RANK} exited with status ${worker_status}." >&2
+        echo "Last node log lines:" >&2
+        tail -40 "${LOG_FILE}" >&2 || true
+        exit "${worker_status}"
+    fi
 fi
