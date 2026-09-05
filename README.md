@@ -99,9 +99,18 @@ def build_custom_prompt(index):
 ./launch_benchmark.sh 1
 ```
 
-启动脚本会从 `run_benchmark.py` 自动读取 PP、TP、master 地址和端口，并设置
-`GLOO_SOCKET_IFNAME`、`NCCL_SOCKET_IFNAME` 等分布式环境变量。也可以通过
-`PYTHON_BIN=/path/to/python ./launch_benchmark.sh 0` 指定 Python 解释器。
+启动脚本会先在每个节点激活名为 `vllm` 的 conda 环境，再从
+`run_benchmark.py` 自动读取 PP、TP、master 地址和端口，并设置
+`GLOO_SOCKET_IFNAME`、`NCCL_SOCKET_IFNAME` 等分布式环境变量。默认 Miniconda
+目录是 `/home/tjy/miniconda3`；如果节点安装位置不同，可以覆盖：
+
+```bash
+CONDA_BASE=/path/to/miniconda3 ./launch_benchmark.sh 0
+```
+
+环境名也可以通过 `CONDA_ENV_NAME` 覆盖，但两台节点必须使用包含相同 vLLM
+依赖的环境。只有需要特殊解释器时才设置 `PYTHON_BIN`，并确保它位于已激活的
+conda 环境内。
 
 ## 输出
 

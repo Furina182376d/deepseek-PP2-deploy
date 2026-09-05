@@ -5,7 +5,26 @@ set -euo pipefail
 
 NODE_RANK="${1:?Usage: $0 <node_rank>}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_BIN="${PYTHON_BIN:-python}"
+
+# ``launch_benchmark.sh`` is commonly started through SSH/non-interactive
+# shells, where the conda shell function has not been initialized.  Activate
+# the same vLLM environment on every node before reading the Python config.
+CONDA_BASE="${CONDA_BASE:-/home/tjy/miniconda3}"
+CONDA_ENV_NAME="${CONDA_ENV_NAME:-vllm}"
+CONDA_SH="${CONDA_SH:-${CONDA_BASE}/etc/profile.d/conda.sh}"
+if [[ ! -r "${CONDA_SH}" ]]; then
+    echo "conda initialization script not found: ${CONDA_SH}" >&2
+    echo "Set CONDA_BASE to the Miniconda installation on this node." >&2
+    exit 2
+fi
+source "${CONDA_SH}"
+conda activate "${CONDA_ENV_NAME}"
+
+PYTHON_BIN="${PYTHON_BIN:-${CONDA_PREFIX}/bin/python}"
+if [[ ! -x "${PYTHON_BIN}" ]]; then
+    echo "Python executable not found in the activated environment: ${PYTHON_BIN}" >&2
+    exit 2
+fi
 cd "${SCRIPT_DIR}"
 
 # Importing run_benchmark.py is side-effect free and only reads its config.
