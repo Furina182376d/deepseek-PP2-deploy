@@ -23,7 +23,7 @@ REQUEST_CONCURRENCY = 4
 sglang serve --trust-remote-code --model-path ... --tp 8 --pp 2 \
   --moe-runner-backend flashinfer_mxfp4 \
   --chunked-prefill-size 8192 --disable-flashinfer-autotune \
-  --swa-full-tokens-ratio 0.1 --mem-fraction-static 0.90 \
+  --swa-full-tokens-ratio 0.1 --mem-fraction-static 0.85 \
   --host 0.0.0.0 --port 30000
 ```
 
@@ -39,17 +39,12 @@ TP 参数别名 `--tp` 或 `--tp-size`。如果安装的 SGLang 版本不支持�
 `/tmp/sglang_flashinfer_workspace` 下；如果需要使用持久化的可写缓存，可以
 覆盖 `FLASHINFER_WORKSPACE_BASE`。
 
-默认情况下关闭投机解码：
-
-```python
-SPECULATIVE_ALGORITHM = None
-```
-
-如需启用投机解码，只需修改这一项，例如设置为
-`SPECULATIVE_ALGORITHM = "DSPARK"`。随后，启动脚本会先验证已安装的 CLI
-是否列出了该算法，再将工作进程放入后台运行。SGLang `0.5.10.post1` 的 CLI
-没有列出 DSPARK（仅列出 `EAGLE`、`EAGLE3`、`NEXTN`、`STANDALONE` 和
-`NGRAM`），因此 DSPARK 需要两台流水线节点都安装支持该算法的匹配版本。
+普通脚本默认关闭投机解码。投机模式使用独立的
+`sglang_benchmark speculative.py`，其中设置了
+`SPECULATIVE_ALGORITHM = "DSPARK"`。启动脚本会先验证已安装的 CLI 是否列出
+DSPARK，再将工作进程放入后台运行。SGLang `0.5.10.post1` 的 CLI 没有列出
+DSPARK（仅列出 `EAGLE`、`EAGLE3`、`NEXTN`、`STANDALONE` 和 `NGRAM`），因此
+DSPARK 需要两台节点都安装支持该算法的匹配版本。
 
 CUDA 13.0 的 `nvcc` 目前可能在编译 DSV4 indexer metadata JIT kernel 时发生
 内部编译器崩溃。启动脚本默认设置
@@ -75,15 +70,27 @@ python -m pip install --upgrade --no-deps --index-url https://flashinfer.ai/whl 
 `MODEL_PATH` 使用该本地目录。如果每台流水线节点上都存在该目录，也可以只
 修改 `MODEL_PATH` 来选择参考路径 `DeepSeek-V4-Pro-0813`。
 
-在两个终端中分别运行：
+普通（非投机）模式在两个终端中分别运行：
 
 ```bash
 # 192.168.0.224
-./launch_sglang_benchmark.sh 0
+./launch_sglang_benchmark.sh 0 standard
 
 # 192.168.0.225
-./launch_sglang_benchmark.sh 1
+./launch_sglang_benchmark.sh 1 standard
 ```
+
+启动脚本的第二个参数控制是否使用投机解码，也可以使用 `0`/`1`：
+
+```bash
+# DSpark 投机模式（两台机器各 8 卡，PP=1、TP=16）
+./launch_sglang_benchmark.sh 0 speculative
+./launch_sglang_benchmark.sh 1 speculative
+```
+
+投机模式选择 `sglang_benchmark speculative.py`，普通模式选择
+`sglang_benchmark.py`。这是必要的拓扑切换，因为当前 SGLang 的 DSpark
+实现要求 `pp_size == 1`；普通模式仍使用 PP=2、每阶段 TP=8。
 
 0 号节点会等待 `/v1/models` 就绪，然后向
 `http://192.168.0.224:30000` 发送兼容 OpenAI 接口的流式补全请求。

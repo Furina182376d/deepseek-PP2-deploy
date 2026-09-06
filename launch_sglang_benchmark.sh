@@ -2,8 +2,30 @@
 # Start one SGLang distributed-server node. Run this on every pipeline node.
 set -euo pipefail
 
-NODE_RANK="${1:?Usage: $0 <node_rank>}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NODE_RANK="${1:?Usage: $0 <node_rank> [0|1|standard|speculative]}"
+SPECULATIVE_MODE="${2:-0}"
+
+case "${SPECULATIVE_MODE,,}" in
+    0|false|no|off|standard|target)
+        BENCHMARK_SCRIPT="${SCRIPT_DIR}/sglang_benchmark.py"
+        MODE_LABEL="standard"
+        ;;
+    1|true|yes|on|speculative|dspark)
+        BENCHMARK_SCRIPT="${SCRIPT_DIR}/sglang_benchmark speculative.py"
+        MODE_LABEL="speculative"
+        ;;
+    *)
+        echo "speculative mode must be 0/1, standard, or speculative" >&2
+        exit 2
+        ;;
+esac
+
+if [[ ! -f "${BENCHMARK_SCRIPT}" ]]; then
+    echo "Benchmark script not found: ${BENCHMARK_SCRIPT}" >&2
+    exit 2
+fi
+
 CONDA_BASE="${CONDA_BASE:-/home/tjy/miniconda3}"
 CONFIG_PYTHON="${CONFIG_PYTHON:-${CONDA_BASE}/bin/python}"
 
@@ -13,12 +35,27 @@ if [[ ! -x "${CONFIG_PYTHON}" ]]; then
 fi
 cd "${SCRIPT_DIR}"
 
+read_config() {
+    "${CONFIG_PYTHON}" - "${BENCHMARK_SCRIPT}" "$1" <<'PY'
+import importlib.util
+import sys
+
+script_path, attribute = sys.argv[1:]
+module_spec = importlib.util.spec_from_file_location("sglang_benchmark_config", script_path)
+if module_spec is None or module_spec.loader is None:
+    raise RuntimeError(f"cannot load benchmark script: {script_path}")
+module = importlib.util.module_from_spec(module_spec)
+module_spec.loader.exec_module(module)
+print(getattr(module, attribute))
+PY
+}
+
 # Read the one central configuration file before activating the SGLang env.
-CONDA_ENV_NAME="${SGLANG_CONDA_ENV:-$(${CONFIG_PYTHON} -c 'import sglang_benchmark as c; print(c.SGLANG_CONDA_ENV)')}"
-NNODES="$(${CONFIG_PYTHON} -c 'import sglang_benchmark as c; print(c.NNODES)')"
-MASTER_ADDR="$(${CONFIG_PYTHON} -c 'import sglang_benchmark as c; print(c.MASTER_ADDR)')"
-SGLANG_PORT="$(${CONFIG_PYTHON} -c 'import sglang_benchmark as c; print(c.SGLANG_PORT)')"
-IFACE_NAME="$(${CONFIG_PYTHON} -c 'import sglang_benchmark as c; print(c.NETWORK_INTERFACE)')"
+CONDA_ENV_NAME="${SGLANG_CONDA_ENV:-$(read_config SGLANG_CONDA_ENV)}"
+NNODES="$(read_config NNODES)"
+MASTER_ADDR="$(read_config MASTER_ADDR)"
+SGLANG_PORT="$(read_config SGLANG_PORT)"
+IFACE_NAME="$(read_config NETWORK_INTERFACE)"
 
 if ! [[ "${NODE_RANK}" =~ ^[0-9]+$ ]] || (( NODE_RANK >= NNODES )); then
     echo "node rank must be an integer in [0, $((NNODES - 1))]" >&2
@@ -74,11 +111,11 @@ mkdir -p "${FLASHINFER_WORKSPACE_BASE}"
 # Check the installed CLI and selected optional features before backgrounding a
 # distributed worker. This prevents rank 0 from waiting for an endpoint after
 # an invalid worker launch.
-"${PYTHON_BIN}" sglang_benchmark.py validate-serve "${NODE_RANK}"
+"${PYTHON_BIN}" "${BENCHMARK_SCRIPT}" validate-serve "${NODE_RANK}"
 
-LOG_FILE="${SGLANG_LOG_FILE:-/tmp/sglang_benchmark_node${NODE_RANK}.log}"
+LOG_FILE="${SGLANG_LOG_FILE:-/tmp/sglang_benchmark_${MODE_LABEL}_node${NODE_RANK}.log}"
 echo "Starting SGLang node ${NODE_RANK}; log: ${LOG_FILE}"
-setsid "${PYTHON_BIN}" sglang_benchmark.py serve "${NODE_RANK}" >"${LOG_FILE}" 2>&1 &
+setsid "${PYTHON_BIN}" "${BENCHMARK_SCRIPT}" serve "${NODE_RANK}" >"${LOG_FILE}" 2>&1 &
 SERVER_PID=$!
 export SGLANG_SERVER_PID="${SERVER_PID}"
 
@@ -94,9 +131,9 @@ if (( NODE_RANK == 0 )); then
     # The root node owns the HTTP endpoint and executes the benchmark after it
     # becomes ready. Ending this process also ends the distributed job.
     if [[ -z "${SGLANG_BENCHMARK_OUTPUT_DIR:-}" ]]; then
-        export SGLANG_BENCHMARK_OUTPUT_DIR="results/sglang_$(date -u +%Y%m%d_%H%M%S)"
+        export SGLANG_BENCHMARK_OUTPUT_DIR="results/sglang_${MODE_LABEL}_$(date -u +%Y%m%d_%H%M%S)"
     fi
-    "${PYTHON_BIN}" sglang_benchmark.py benchmark
+    "${PYTHON_BIN}" "${BENCHMARK_SCRIPT}" benchmark
 else
     # A non-root node has no benchmark client. Once it has observed the root
     # endpoint healthy, three failed health checks mean rank 0 completed or

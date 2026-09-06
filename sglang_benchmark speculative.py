@@ -32,10 +32,11 @@ from typing import Any
 # model currently present under /data/models on 192.168.0.224 and .225.
 MODEL_PATH = "/data/models/DeepSeek-V4-Pro-DSpark"
 
-# One node hosts one pipeline stage. PP=2 and TP=8 use 16 GPUs across 2 nodes.
-PP_SIZE = 2
-TP_SIZE_PER_STAGE = 8
-NNODES = PP_SIZE
+# DSpark currently requires pp_size == 1. Use all 16 GPUs as one tensor-
+# parallel group spread across the two 8-GPU nodes.
+PP_SIZE = 1
+TP_SIZE_PER_STAGE = 16
+NNODES = 2
 MASTER_ADDR = "192.168.0.224"
 DIST_PORT = 29501
 NETWORK_INTERFACE = "eth0"
@@ -48,9 +49,9 @@ SGLANG_CONDA_ENV = "sglang"
 # SGLang serve options, based on the requested reference configuration.
 TRUST_REMOTE_CODE = True
 MOE_RUNNER_BACKEND = "flashinfer_mxfp4"
-# Keep the PP=2 benchmark target-only. DSpark speculative decoding requires
-# pp_size == 1 and is configured in ``sglang_benchmark speculative.py``.
-SPECULATIVE_ALGORITHM: str | None = None
+# The DeepSeek-V4 DSpark checkpoint bundles its draft head, so no separate
+# speculative draft model path is required.
+SPECULATIVE_ALGORITHM: str | None = "DSPARK"
 CHUNKED_PREFILL_SIZE = 8192
 DISABLE_FLASHINFER_AUTOTUNE = True
 SWA_FULL_TOKENS_RATIO = 0.1
@@ -58,6 +59,8 @@ MEM_FRACTION_STATIC = 0.85
 SGLANG_EXTRA_SERVE_ARGS: tuple[str, ...] = (
     "--cuda-graph-max-bs-decode",
     "4",
+    "--watchdog-timeout",
+    "1800",
 )
 
 # ``longbench``, ``classic``, or ``custom``.
@@ -85,8 +88,16 @@ def validate_config() -> None:
     errors: list[str] = []
     if not MODEL_PATH:
         errors.append("MODEL_PATH must not be empty")
-    if PP_SIZE <= 0 or TP_SIZE_PER_STAGE <= 0 or NNODES != PP_SIZE:
-        errors.append("PP_SIZE/TP_SIZE_PER_STAGE must be positive and NNODES must equal PP_SIZE")
+    if (
+        PP_SIZE <= 0
+        or TP_SIZE_PER_STAGE <= 0
+        or NNODES <= 0
+        or (PP_SIZE * TP_SIZE_PER_STAGE) % NNODES != 0
+    ):
+        errors.append(
+            "PP_SIZE/TP_SIZE_PER_STAGE/NNODES must be positive and total world size "
+            "must be divisible by NNODES"
+        )
     if not MASTER_ADDR or not NETWORK_INTERFACE:
         errors.append("MASTER_ADDR and NETWORK_INTERFACE must not be empty")
     if not 1 <= SGLANG_PORT <= 65535 or not 1 <= DIST_PORT <= 65535:
