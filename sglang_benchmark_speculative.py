@@ -48,7 +48,9 @@ SGLANG_CONDA_ENV = "sglang"
 
 # SGLang serve options, based on the requested reference configuration.
 TRUST_REMOTE_CODE = True
-MOE_RUNNER_BACKEND = "flashinfer_mxfp4"
+# Humming pads the TP=16 local expert width (192) to the kernel-supported
+# tile size on H20/SM90 while preserving the checkpoint's MXFP4 weights.
+MOE_RUNNER_BACKEND = "humming"
 # The DeepSeek-V4 DSpark checkpoint bundles its draft head, so no separate
 # speculative draft model path is required.
 SPECULATIVE_ALGORITHM: str | None = "DSPARK"

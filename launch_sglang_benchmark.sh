@@ -12,7 +12,7 @@ case "${SPECULATIVE_MODE,,}" in
         MODE_LABEL="standard"
         ;;
     1|true|yes|on|speculative|dspark)
-        BENCHMARK_SCRIPT="${SCRIPT_DIR}/sglang_benchmark speculative.py"
+        BENCHMARK_SCRIPT="${SCRIPT_DIR}/sglang_benchmark_speculative.py"
         MODE_LABEL="speculative"
         ;;
     *)
