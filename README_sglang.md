@@ -51,6 +51,12 @@ SPECULATIVE_ALGORITHM = None
 没有列出 DSPARK（仅列出 `EAGLE`、`EAGLE3`、`NEXTN`、`STANDALONE` 和
 `NGRAM`），因此 DSPARK 需要两台流水线节点都安装支持该算法的匹配版本。
 
+CUDA 13.0 的 `nvcc` 目前可能在编译 DSV4 indexer metadata JIT kernel 时发生
+内部编译器崩溃。启动脚本默认设置
+`SGLANG_OPT_USE_JIT_INDEXER_METADATA=0`，改用环境中 `deep_gemm` 提供的实现，
+以避免该问题。确认 CUDA 工具链可以正常编译该 JIT kernel 后，可通过设置
+`SGLANG_OPT_USE_JIT_INDEXER_METADATA=1` 恢复 JIT 路径。
+
 启动脚本默认设置 `FLASHINFER_DISABLE_VERSION_CHECK=1`，用于兼容镜像中
 `flashinfer` 与预编译 `flashinfer-cubin` 版本暂时不一致的情况；启动时会
 打印警告。长期运行或发布环境应在两台节点安装相同版本后，用

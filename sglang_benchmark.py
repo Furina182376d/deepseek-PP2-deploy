@@ -54,8 +54,11 @@ SPECULATIVE_ALGORITHM: str | None = None
 CHUNKED_PREFILL_SIZE = 8192
 DISABLE_FLASHINFER_AUTOTUNE = True
 SWA_FULL_TOKENS_RATIO = 0.1
-MEM_FRACTION_STATIC = 0.90
-SGLANG_EXTRA_SERVE_ARGS: tuple[str, ...] = ()
+MEM_FRACTION_STATIC = 0.85
+SGLANG_EXTRA_SERVE_ARGS: tuple[str, ...] = (
+    "--cuda-graph-max-bs-decode",
+    "4",
+)
 
 # ``longbench``, ``classic``, or ``custom``.
 BENCHMARK_TYPE = "longbench"

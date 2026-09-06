@@ -49,6 +49,10 @@ export NCCL_CUMEM_HOST_ENABLE="${NCCL_CUMEM_HOST_ENABLE:-0}"
 export NCCL_ASYNC_ERROR_HANDLING="${NCCL_ASYNC_ERROR_HANDLING:-1}"
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+# CUDA 13.0's nvcc currently crashes while compiling SGLang's DSV4 indexer
+# metadata JIT kernel. DeepGEMM provides the equivalent implementation, so use
+# it by default; set this to 1 only after the toolchain can compile the JIT path.
+export SGLANG_OPT_USE_JIT_INDEXER_METADATA="${SGLANG_OPT_USE_JIT_INDEXER_METADATA:-0}"
 # The current image may ship a FlashInfer Python package newer than its
 # precompiled cubin package. Keep the launcher usable in that image while
 # allowing strict dependency validation with FLASHINFER_DISABLE_VERSION_CHECK=0.
