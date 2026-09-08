@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Unified multi-node vLLM benchmark runner.
+"""DSpark speculative-decoding vLLM benchmark runner.
 
-Edit the CONFIGURATION section below, then run ``launch_benchmark.sh`` on
-each pipeline node.  The launcher reads PP/TP, node count, model path and
-network settings from this file, so no second configuration file is needed.
+Sister file of ``vllm_benchmark.py``; launched with
+``launch_vllm_benchmark.sh <node_rank> speculative``.  The launcher reads PP/TP,
+node count, model path and network settings from this file, so no second
+configuration file is needed.
+
+DSpark in vLLM 0.27.1 supports only PP=1 (see README_vllm.md, section
+"DSpark 投机模式不支持 PP>1"), so the 16 GPUs across both nodes form one
+TP=16 group instead of two PP stages.
 
 Supported benchmark modes:
   * ``longbench``: LongBench JSON/JSONL files.  Select files with
@@ -30,10 +35,16 @@ from typing import Any
 # =============================================================================
 MODEL_PATH = "/data/models/DeepSeek-V4-Pro-DSpark"
 
-# One node hosts one pipeline stage.  Therefore NNODES must equal PP_SIZE.
-PP_SIZE = 2
+# DSpark supports only PP=1 (vLLM 0.27.1; see README_vllm.md).  All 16 GPUs
+# therefore form one tensor-parallel group spanning the two 8-GPU nodes
+# instead of two PP stages.
+PP_SIZE = 1
+NNODES = 2
+# Per-node GPU count; the launcher uses it as ``--nproc_per_node``.
 TP_SIZE_PER_STAGE = 8
-NNODES = PP_SIZE
+# Size of the whole TP group (TP_SIZE_PER_STAGE * NNODES).  Passed to vLLM as
+# ``tensor_parallel_size``.
+TENSOR_PARALLEL_SIZE = 16
 MASTER_ADDR = "192.168.0.224"
 MASTER_PORT = 29500
 NETWORK_INTERFACE = "eth0"
@@ -73,7 +84,14 @@ COMPILATION_CONFIG: dict[str, Any] | None = {
 }
 ENFORCE_EAGER = False
 ENABLE_FLASHINFER_AUTOTUNE = False
-SPECULATIVE_CONFIG: dict[str, Any] | None = None
+# DSpark: the DeepSeek-V4 checkpoint bundles its draft head, so no separate
+# draft model is given (SpeculativeConfig then reuses MODEL_PATH).  The draft
+# emits num_speculative_tokens tokens per parallel block, matching the
+# checkpoint's dspark_block_size=5.
+SPECULATIVE_CONFIG: dict[str, Any] | None = {
+    "method": "dspark",
+    "num_speculative_tokens": 5,
+}
 
 RESULTS_DIR = "results"
 
@@ -98,7 +116,7 @@ def _env_int(name: str, default: int) -> int:
 def _rank_info() -> dict[str, int | bool]:
     local_world_size = _env_int("LOCAL_WORLD_SIZE", TP_SIZE_PER_STAGE)
     global_rank = _env_int("RANK", 0)
-    world_size = _env_int("WORLD_SIZE", PP_SIZE * TP_SIZE_PER_STAGE)
+    world_size = _env_int("WORLD_SIZE", NNODES * TP_SIZE_PER_STAGE)
     local_rank = _env_int("LOCAL_RANK", 0)
     node_rank = global_rank // local_world_size
     return {
@@ -115,10 +133,13 @@ def validate_config() -> None:
     errors: list[str] = []
     if not MODEL_PATH:
         errors.append("MODEL_PATH must not be empty")
-    if PP_SIZE <= 0 or TP_SIZE_PER_STAGE <= 0:
-        errors.append("PP_SIZE and TP_SIZE_PER_STAGE must be positive")
-    if NNODES != PP_SIZE:
-        errors.append("NNODES must equal PP_SIZE (one pipeline stage per node)")
+    if PP_SIZE != 1:
+        errors.append("PP_SIZE must be 1 (DSpark does not support pipeline "
+                      "parallelism; see README_vllm.md)")
+    if TP_SIZE_PER_STAGE <= 0 or NNODES <= 0:
+        errors.append("TP_SIZE_PER_STAGE and NNODES must be positive")
+    if TENSOR_PARALLEL_SIZE != TP_SIZE_PER_STAGE * NNODES:
+        errors.append("TENSOR_PARALLEL_SIZE must equal TP_SIZE_PER_STAGE * NNODES")
     if not MASTER_ADDR:
         errors.append("MASTER_ADDR must not be empty")
     if BENCHMARK_TYPE not in {"longbench", "classic", "custom"}:
@@ -554,14 +575,14 @@ def _write_results(
 def main() -> int:
     validate_config()
     rank = _rank_info()
-    expected_world = PP_SIZE * TP_SIZE_PER_STAGE
+    expected_world = NNODES * TP_SIZE_PER_STAGE
     if int(rank["local_world_size"]) != TP_SIZE_PER_STAGE:
         raise ValueError(
             f"LOCAL_WORLD_SIZE={rank['local_world_size']} but TP_SIZE_PER_STAGE={TP_SIZE_PER_STAGE}"
         )
     if int(rank["world_size"]) != expected_world:
         raise ValueError(
-            f"WORLD_SIZE={rank['world_size']} but PP_SIZE*TP_SIZE_PER_STAGE={expected_world}"
+            f"WORLD_SIZE={rank['world_size']} but NNODES*TP_SIZE_PER_STAGE={expected_world}"
         )
 
     # CUDA/vLLM are imported only after configuration inspection, which lets
@@ -578,7 +599,9 @@ def main() -> int:
     kwargs: dict[str, Any] = {
         "model": MODEL_PATH,
         "pipeline_parallel_size": PP_SIZE,
-        "tensor_parallel_size": TP_SIZE_PER_STAGE,
+        # With PP=1 the TP group spans both nodes (16 GPUs); the per-node
+        # process count remains TP_SIZE_PER_STAGE (8).
+        "tensor_parallel_size": TENSOR_PARALLEL_SIZE,
         "prefill_context_parallel_size": PREFILL_CONTEXT_PARALLEL_SIZE,
         "decode_context_parallel_size": DECODE_CONTEXT_PARALLEL_SIZE,
         "enable_expert_parallel": ENABLE_EXPERT_PARALLEL,
@@ -607,7 +630,7 @@ def main() -> int:
     if bool(rank["is_leader"]):
         print(
             f"Loading {MODEL_PATH} | benchmark={BENCHMARK_TYPE} | "
-            f"PP={PP_SIZE} TP={TP_SIZE_PER_STAGE} EP={ENABLE_EXPERT_PARALLEL}"
+            f"PP={PP_SIZE} TP={TENSOR_PARALLEL_SIZE} EP={ENABLE_EXPERT_PARALLEL}"
         )
     llm = LLM(**kwargs)
     if dist.is_initialized():

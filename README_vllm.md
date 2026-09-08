@@ -146,6 +146,50 @@ CONDA_BASE=/path/to/miniconda3 ./launch_vllm_benchmark.sh 0
 依赖的环境。只有需要特殊解释器时才设置 `PYTHON_BIN`，并确保它位于已激活的
 conda 环境内。
 
+## DSpark 投机模式不支持 PP>1
+
+vLLM 的 DSpark 投机解码（DeepSeek-V4 checkpoint 自带 draft head）目前只支持
+PP=1。这是 vLLM 0.27.1（conda 环境 `vllm`）源码中的硬性限制，与 SGLang 一侧的
+DSpark 要求 `pp_size == 1` 一致，不是配置写法问题。三条互相独立的证据：
+
+**1. DSpark 加载器硬性禁止 PP**
+
+`/home/tjy/miniconda3/envs/vllm/lib/python3.12/site-packages/vllm/v1/worker/gpu/spec_decode/dspark/utils.py:50`，
+`load_dspark_model()` 内：
+
+```python
+if get_pp_group().world_size != 1:
+    raise NotImplementedError("DSpark does not support pipeline parallelism.")
+```
+
+PP=2 时每个 rank 装载 draft 模型都会在此抛 `NotImplementedError`，没有可绕
+过的参数。
+
+**2. DSpark 强制 V2 model runner，而 V2 不支持 external_launcher + PP>1**
+
+- `/home/tjy/miniconda3/envs/vllm/lib/python3.12/site-packages/vllm/config/vllm.py`：
+  `method == "dspark"` 使 `use_v2_model_runner` 返回 `True`（DeepSeek-V4 本身
+  不是默认 V2 架构，是为 dspark 强制 V2；若 V2 不支持其余配置会直接 raise，
+  不会回退到 V1）。
+- 同上（V2 unsupported 列表）：V2 没有实现 V1 用于 torchrun
+  （`external_launcher`）的 PP 输出广播 `broadcast_pp_output`，因此
+  `external_launcher + pipeline_parallel_size > 1` 不受支持，而本套件正是以
+  torchrun 两机、每机一个 PP stage 的方式启动。
+- `_validate_v2_model_runner()` 在 unsupported 非空时 raise `ValueError`，
+  因此即使绕过第 1 条，也会被这道检查拦下。
+
+**3. 架构机制：DSpark draft 必须与目标层同进程**
+
+`load_dspark_model()` 会把 draft 模型的 `embed_tokens` / `lm_head` 在进程内
+直接替换为目标模型的张量（weight sharing），draft 头取目标模型指定层
+（`/data/models/DeepSeek-V4-Pro-DSpark/config.json` 中的
+`dspark_target_layer_ids=[58,59,60]`）的 hidden state 作为输入。PP 切分后这
+些层分散在不同进程，draft 头无法工作。
+
+因此投机模式使用 PP=1：配合 TP=16 跨两机（每机 8 卡）仍可占用全部 16 张卡，
+总规模与普通模式的 PP=2 × TP=8 相当，便于对比。投机脚本内 `NNODES` 不再等
+于 `PP_SIZE`（校验逻辑需相应放宽）。
+
 ## 输出
 
 rank 0 会把结果写入 `results/<UTC timestamp>/`，包含：
