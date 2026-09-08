@@ -83,7 +83,7 @@ python -m pip install --upgrade --no-deps --index-url https://flashinfer.ai/whl 
 启动脚本的第二个参数控制是否使用投机解码，也可以使用 `0`/`1`：
 
 ```bash
-# DSpark 投机模式（两台机器各 8 卡，PP=1、TP=16）
+# DSpark 投机模式（两台机器各 8 卡，PP=1、TP=16、EP=16）
 ./launch_sglang_benchmark.sh 0 speculative
 ./launch_sglang_benchmark.sh 1 speculative
 ```
@@ -91,6 +91,15 @@ python -m pip install --upgrade --no-deps --index-url https://flashinfer.ai/whl 
 投机模式选择 `sglang_benchmark speculative.py`，普通模式选择
 `sglang_benchmark.py`。这是必要的拓扑切换，因为当前 SGLang 的 DSpark
 实现要求 `pp_size == 1`；普通模式仍使用 PP=2、每阶段 TP=8。
+
+投机脚本对 DeepSeek-V4-Pro-DSpark 显式设置 `--ep-size 16` 和
+`--moe-a2a-backend deepep`。该模型的 FP4 MoE 中间维是 3072，TP=16 且
+不启用 EP 时每个 rank 只有 192 维，无法满足 FP8 block quant 的
+`block_n=128` 对齐要求；EP=TP 后 MoE 的本地 TP size 为 1，维度恢复为
+3072。Humming 有对应的 DeepEP dispatch 路径，启动日志应显示 EP=16，且
+不再出现 `output_size ... 192 ... block_n=128`。
+
+DeepEP 在设计上强制依赖 NVSHMEM，而 NVSHMEM 正常运行的前提是支持 GPUDirect RDMA 的硬件和驱动。你的环境不具备这些，因此通过软件配置无法使 DeepEP 工作。你之前尝试设置各种环境变量强制 TCP 模式均无效，正是因为底层硬件/驱动无法满足
 
 0 号节点会等待 `/v1/models` 就绪，然后向
 `http://192.168.0.224:30000` 发送兼容 OpenAI 接口的流式补全请求。

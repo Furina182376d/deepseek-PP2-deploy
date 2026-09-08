@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
 # Start one SGLang distributed-server node. Run this on every pipeline node.
+unset NVSHMEM_IB_ADDR_FAMILY
+unset NVSHMEM_IB_ADDR_RANGE
+
+export NVSHMEM_IB_ENABLE=0
+export NVSHMEM_USE_GDR=0
+export NVSHMEM_DISABLE_IB=1
+export NVSHMEM_TRANSPORT=tcp
+export DEEPEP_IB_ENABLE=0
+export DEEPEP_NVLS_ENABLE=0
+export NVSHMEM_DEBUG=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

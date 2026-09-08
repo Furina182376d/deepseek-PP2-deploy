@@ -33,9 +33,13 @@ from typing import Any
 MODEL_PATH = "/data/models/DeepSeek-V4-Pro-DSpark"
 
 # DSpark currently requires pp_size == 1. Use all 16 GPUs as one tensor-
-# parallel group spread across the two 8-GPU nodes.
+# parallel group spread across the two 8-GPU nodes. Expert parallelism spans
+# that TP group so the FP4 expert width is not split into the unsupported
+# 192-wide TP shard (3072 / 16).
 PP_SIZE = 1
-TP_SIZE_PER_STAGE = 16
+TP_SIZE_PER_STAGE = 4
+DP_SIZE = 4
+EP_SIZE = 4
 NNODES = 2
 MASTER_ADDR = "192.168.0.224"
 DIST_PORT = 29501
@@ -48,9 +52,11 @@ SGLANG_CONDA_ENV = "sglang"
 
 # SGLang serve options, based on the requested reference configuration.
 TRUST_REMOTE_CODE = True
-# Humming pads the TP=16 local expert width (192) to the kernel-supported
-# tile size on H20/SM90 while preserving the checkpoint's MXFP4 weights.
-MOE_RUNNER_BACKEND = "humming"
+# Humming's FP4 block-quantized weights require each local expert dimension to
+# be divisible by block_n=128. DeepEP EP=TP keeps the local MoE TP size at 1,
+# so the 3072-wide checkpoint dimension remains block-aligned.
+MOE_RUNNER_BACKEND = "flashinfer_cutlass"
+MOE_A2A_BACKEND = "flashinfer"
 # The DeepSeek-V4 DSpark checkpoint bundles its draft head, so no separate
 # speculative draft model path is required.
 SPECULATIVE_ALGORITHM: str | None = "DSPARK"
@@ -59,10 +65,12 @@ DISABLE_FLASHINFER_AUTOTUNE = True
 SWA_FULL_TOKENS_RATIO = 0.1
 MEM_FRACTION_STATIC = 0.85
 SGLANG_EXTRA_SERVE_ARGS: tuple[str, ...] = (
-    "--cuda-graph-max-bs-decode",
-    "4",
+    "--disable-cuda-graph",
     "--watchdog-timeout",
     "1800",
+    "--enable-dp-attention",
+    "--enable-dp-lm-head",
+    "--disable-custom-all-reduce",
 )
 
 # ``longbench``, ``classic``, or ``custom``.
@@ -93,6 +101,7 @@ def validate_config() -> None:
     if (
         PP_SIZE <= 0
         or TP_SIZE_PER_STAGE <= 0
+        or EP_SIZE <= 0
         or NNODES <= 0
         or (PP_SIZE * TP_SIZE_PER_STAGE) % NNODES != 0
     ):
@@ -100,6 +109,10 @@ def validate_config() -> None:
             "PP_SIZE/TP_SIZE_PER_STAGE/NNODES must be positive and total world size "
             "must be divisible by NNODES"
         )
+    if EP_SIZE > 0 and TP_SIZE_PER_STAGE % EP_SIZE != 0:
+        errors.append("EP_SIZE must divide TP_SIZE_PER_STAGE")
+    # if MOE_RUNNER_BACKEND == "humming" and MOE_A2A_BACKEND != "deepep":
+    #     errors.append("speculative FP4 Humming runs require MOE_A2A_BACKEND='deepep'")
     if not MASTER_ADDR or not NETWORK_INTERFACE:
         errors.append("MASTER_ADDR and NETWORK_INTERFACE must not be empty")
     if not 1 <= SGLANG_PORT <= 65535 or not 1 <= DIST_PORT <= 65535:
@@ -390,6 +403,8 @@ def _write_report(
         "model": MODEL_PATH,
         "pp_size": PP_SIZE,
         "tp_size_per_stage": TP_SIZE_PER_STAGE,
+        "ep_size": EP_SIZE,
+        "moe_a2a_backend": MOE_A2A_BACKEND,
         "nnodes": NNODES,
         "speculative_algorithm": SPECULATIVE_ALGORITHM,
         "request_concurrency": REQUEST_CONCURRENCY,
@@ -518,6 +533,9 @@ def _build_serve_args(node_rank: int) -> list[str]:
     pp_flag = _select_serve_flag(
         help_text, "pipeline parallelism", ("--pp", "--pp-size", "--pipeline-parallel-size")
     )
+    ep_flag = _select_serve_flag(
+        help_text, "expert parallelism", ("--ep-size", "--expert-parallel-size", "--ep")
+    )
     nnodes_flag = _select_serve_flag(help_text, "node count", ("--nnodes", "--num-nodes"))
     node_rank_flag = _select_serve_flag(help_text, "node rank", ("--node-rank",))
     init_addr_flag = _select_serve_flag(
@@ -535,6 +553,10 @@ def _build_serve_args(node_rank: int) -> list[str]:
         "--host", SGLANG_HOST,
         "--port", str(SGLANG_PORT),
         "--moe-runner-backend", MOE_RUNNER_BACKEND,
+        "--moe-a2a-backend", MOE_A2A_BACKEND,
+        "--dp-size", str(DP_SIZE),
+        ep_flag, str(EP_SIZE),
+        "--dp-size", str(DP_SIZE), 
         "--chunked-prefill-size", str(CHUNKED_PREFILL_SIZE),
         "--swa-full-tokens-ratio", str(SWA_FULL_TOKENS_RATIO),
         "--mem-fraction-static", str(MEM_FRACTION_STATIC),
@@ -584,6 +606,31 @@ def validate_serve(node_rank: int) -> int:
 def serve(node_rank: int) -> int:
     _validate_model_compatibility()
     args = _build_serve_args(node_rank)
+
+    # 移除可能强制 IB 的环境变量
+    os.environ.pop("NVSHMEM_IB_ADDR_FAMILY", None)
+    os.environ.pop("NVSHMEM_IB_ADDR_RANGE", None)
+
+    os.environ.update({
+        "NVSHMEM_IB_ENABLE": "0",
+        "NVSHMEM_USE_GDR": "0",
+        "NVSHMEM_DISABLE_IB": "1",
+        "NVSHMEM_TRANSPORT": "tcp",
+        "NVSHMEM_IBV_ENABLE": "0",
+        "NVSHMEM_DEFAULT_TRANSPORT": "tcp",
+        "NVSHMEM_TCP_IFNAME": "eth0",
+        "NVSHMEM_USE_NVLS": "0",
+        "NVSHMEM_IBGDA_SUPPORT": "0",
+        "NVSHMEM_IBRC_SUPPORT": "0",
+        "NVSHMEM_USE_NCCL": "0",          # 关键：禁用 NCCL 传输
+        "NVSHMEM_SYMMETRIC_SIZE": "2G",   # 显式分配对称堆大小
+        "DEEPEP_IB_ENABLE": "0",
+        "DEEPEP_NVLS_ENABLE": "0",
+        "NVSHMEM_DEBUG": "1",
+        "SGLANG_USE_DEEP_GEMM": "0",
+        "DEEP_GEMM_DISABLE": "1",
+    })
+    print("Starting with env:", {k: os.environ.get(k) for k in ["NVSHMEM_IB_ENABLE", "NVSHMEM_TRANSPORT", "DEEPEP_IB_ENABLE"]})
     print("Starting: " + " ".join(args), flush=True)
     os.execvp(args[0], args)
 
