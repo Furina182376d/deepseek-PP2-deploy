@@ -1,12 +1,38 @@
 #!/usr/bin/env bash
-# Start the unified benchmark on one pipeline node.
+# Start the unified vLLM benchmark on one pipeline node.
 # Run with node rank 0 on MASTER_ADDR and rank 1 (etc.) on the other nodes.
+#
+# The second argument selects which benchmark runner executes: ``standard``
+# runs vllm_benchmark.py, ``speculative`` runs vllm_benchmark_speculative.py.
+# Each script carries its own PP/TP topology, so the launcher reads the
+# distributed config from whichever script was selected.
 set -euo pipefail
 
-NODE_RANK="${1:?Usage: $0 <node_rank>}"
+NODE_RANK="${1:?Usage: $0 <node_rank> [0|1|standard|speculative]}"
+SPECULATIVE_MODE="${2:-0}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# ``launch_benchmark.sh`` is commonly started through SSH/non-interactive
+case "${SPECULATIVE_MODE,,}" in
+    0|false|no|off|standard|target)
+        BENCHMARK_SCRIPT="${SCRIPT_DIR}/vllm_benchmark.py"
+        MODE_LABEL="standard"
+        ;;
+    1|true|yes|on|speculative|dspark)
+        BENCHMARK_SCRIPT="${SCRIPT_DIR}/vllm_benchmark_speculative.py"
+        MODE_LABEL="speculative"
+        ;;
+    *)
+        echo "speculative mode must be 0/1, standard, or speculative" >&2
+        exit 2
+        ;;
+esac
+
+if [[ ! -f "${BENCHMARK_SCRIPT}" ]]; then
+    echo "Benchmark script not found: ${BENCHMARK_SCRIPT}" >&2
+    exit 2
+fi
+
+# ``launch_vllm_benchmark.sh`` is commonly started through SSH/non-interactive
 # shells, where the conda shell function has not been initialized.  Activate
 # the same vLLM environment on every node before reading the Python config.
 CONDA_BASE="${CONDA_BASE:-/home/tjy/miniconda3}"
@@ -27,12 +53,28 @@ if [[ ! -x "${PYTHON_BIN}" ]]; then
 fi
 cd "${SCRIPT_DIR}"
 
-# Importing run_benchmark.py is side-effect free and only reads its config.
-NNODES="$(${PYTHON_BIN} -c 'import run_benchmark as c; print(c.NNODES)')"
-TP_SIZE="$(${PYTHON_BIN} -c 'import run_benchmark as c; print(c.TP_SIZE_PER_STAGE)')"
-MASTER_ADDR="$(${PYTHON_BIN} -c 'import run_benchmark as c; print(c.MASTER_ADDR)')"
-MASTER_PORT="$(${PYTHON_BIN} -c 'import run_benchmark as c; print(c.MASTER_PORT)')"
-IFACE_NAME="$(${PYTHON_BIN} -c 'import run_benchmark as c; print(c.NETWORK_INTERFACE)')"
+# Importing the benchmark module is side-effect free (its config section only
+# uses the standard library), so the selected script can be queried by path.
+read_config() {
+    "${PYTHON_BIN}" - "${BENCHMARK_SCRIPT}" "$1" <<'PY'
+import importlib.util
+import sys
+
+script_path, attribute = sys.argv[1:]
+module_spec = importlib.util.spec_from_file_location("vllm_benchmark_config", script_path)
+if module_spec is None or module_spec.loader is None:
+    raise RuntimeError(f"cannot load benchmark script: {script_path}")
+module = importlib.util.module_from_spec(module_spec)
+module_spec.loader.exec_module(module)
+print(getattr(module, attribute))
+PY
+}
+
+NNODES="$(read_config NNODES)"
+TP_SIZE="$(read_config TP_SIZE_PER_STAGE)"
+MASTER_ADDR="$(read_config MASTER_ADDR)"
+MASTER_PORT="$(read_config MASTER_PORT)"
+IFACE_NAME="$(read_config NETWORK_INTERFACE)"
 
 if ! [[ "${NODE_RANK}" =~ ^[0-9]+$ ]] || (( NODE_RANK >= NNODES )); then
     echo "node rank must be an integer in [0, $((NNODES - 1))]" >&2
@@ -50,10 +92,11 @@ export VLLM_ENABLE_V1_MULTIPROCESSING="${VLLM_ENABLE_V1_MULTIPROCESSING:-0}"
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
 
+echo "Starting vLLM node ${NODE_RANK} (${MODE_LABEL} mode); benchmark script: ${BENCHMARK_SCRIPT}"
 exec "${PYTHON_BIN}" -m torch.distributed.run \
     --nnodes="${NNODES}" \
     --nproc_per_node="${TP_SIZE}" \
     --node_rank="${NODE_RANK}" \
     --master_addr="${MASTER_ADDR}" \
     --master_port="${MASTER_PORT}" \
-    run_benchmark.py
+    "${BENCHMARK_SCRIPT}"
