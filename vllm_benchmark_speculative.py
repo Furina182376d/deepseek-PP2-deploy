@@ -82,16 +82,13 @@ COMPILATION_CONFIG: dict[str, Any] | None = {
     "mode": 0,
     "cudagraph_mode": "FULL_DECODE_ONLY",
 }
-ENFORCE_EAGER = False
+ENFORCE_EAGER = True
 ENABLE_FLASHINFER_AUTOTUNE = False
-# DSpark: the DeepSeek-V4 checkpoint bundles its draft head, so no separate
-# draft model is given (SpeculativeConfig then reuses MODEL_PATH).  The draft
-# emits num_speculative_tokens tokens per parallel block, matching the
-# checkpoint's dspark_block_size=5.
-SPECULATIVE_CONFIG: dict[str, Any] | None = {
-    "method": "dspark",
-    "num_speculative_tokens": 5,
-}
+# TEMP binary-split experiment: SPECULATIVE_CONFIG=None runs plain PP=1/TP=16
+# (no DSpark) to decide whether the post-load hang is DSpark-specific or a
+# cross-node TP16 initialization issue. Restore the dspark dict from
+# /tmp/vllm_benchmark_speculative_dspark_enforce_eager.py afterwards.
+SPECULATIVE_CONFIG: dict[str, Any] | None = None
 
 RESULTS_DIR = "results"
 
@@ -602,6 +599,10 @@ def main() -> int:
         # With PP=1 the TP group spans both nodes (16 GPUs); the per-node
         # process count remains TP_SIZE_PER_STAGE (8).
         "tensor_parallel_size": TENSOR_PARALLEL_SIZE,
+        # A cross-node TP group (no MNNVL) still triggers the custom-AR
+        # symm_mem rendezvous, which passes buffer fds over UNIX sockets and
+        # deadlocks between hosts. Fall back to standard NCCL all-reduce.
+        "disable_custom_all_reduce": True,
         "prefill_context_parallel_size": PREFILL_CONTEXT_PARALLEL_SIZE,
         "decode_context_parallel_size": DECODE_CONTEXT_PARALLEL_SIZE,
         "enable_expert_parallel": ENABLE_EXPERT_PARALLEL,

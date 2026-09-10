@@ -211,3 +211,44 @@ rank 0 会把结果写入 `results/<UTC timestamp>/`，包含：
 python -m py_compile vllm_benchmark.py vllm_benchmark_speculative.py
 bash -n launch_vllm_benchmark.sh
 ```
+
+## 问题解决过程
+
+真实集群上遇到的启动问题与解决方案，按时间顺序记录。两机同时卡住时，先用
+以下手段区分「死锁」与「仍在推进」：
+
+- `ps -eo pid,stat,etime,%cpu,cmd | grep vllm_benchmark`：进程为 `S` 且 CPU
+  接近 0 更像等待；为 `R` 且 CPU 高说明在计算。
+- `nvidia-smi`：GPU 利用率 0% + 显存不增长 = 卡在初始化；GPU 100% 或显存
+  增长 = 在推进。
+- 死锁特征：主线程 `wchan` 为空、`timeout 6 strace -p <pid> -c` 六秒零系统
+  调用（纯用户态自旋）、模型尚未开始加载（显存为空）。
+
+### 问题 1：跨机 TP 下 custom all-reduce 的 symm_mem fd 传递导致两机死锁（已解决）
+
+**现象**：PP=1/TP=16 跨两机启动时，16 个 rank 的 NCCL 组建立完成、跨机 TCP
+全部 ESTABLISHED 后进程无限卡住：主线程纯用户态自旋、GPU 显存为空（模型
+从未开始加载）。带 `VLLM_LOGGING_LEVEL=DEBUG` 重跑后，192.168.0.225 打印：
+
+```text
+DEBUG ... [custom_all_reduce.py:312] MNNVL AG/RS initialization failed: Failed to send fd: No such file or directory
+WARNING ... [custom_all_reduce.py:254] Custom collectives are disabled because this multi-node group does not support MNNVL multicast.
+```
+
+**原因**：vLLM 0.27.1（`/home/tjy/miniconda3/envs/vllm/lib/python3.12/site-packages/vllm`）
+初始化 custom all-reduce 时，在
+`distributed/device_communicators/custom_all_reduce.py` 的 `_init_mnnvl_buffer`
+里通过 `torch_symm_mem.rendezvous` 用 UNIX socket **fd 传递**分发跨机共享
+显存 buffer；UNIX socket fd 只能在同一台机器内传递，跨机必然失败。失败处理
+不对称：发送方打印 warning 后放弃并继续（`disabled=True`），接收方卡在
+rendezvous 中永远等不到 fd → 单边状态不一致，两机互相等待。普通 PP=2/TP=8
+模式不受影响（TP 组在单机内、无跨机 fd 传递），这是跨机 TP 首次触发该路径。
+`disable_custom_all_reduce` 不会因跨机自动打开（`config/parallel.py` 只在平台
+不支持或 `VLLM_BATCH_INVARIANT` 时置 True）。
+
+**解决**：对 vLLM 显式传 `disable_custom_all_reduce=True`（`vllm_benchmark_speculative.py`
+的 `main()` kwargs），完全跳过 custom-AR 的 MNNVL/symm_mem 初始化，回退标准
+NCCL all-reduce。修复后权重正常加载（66/66 shards、每 rank 58.29 GiB），
+DSpark draft 模型正常装载（日志 `DSpark draft model loaded: 96 params`）。
+
+/tmp/dummy_tp16_224.log

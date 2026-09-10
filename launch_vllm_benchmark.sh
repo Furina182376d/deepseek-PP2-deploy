@@ -85,6 +85,11 @@ export GLOO_SOCKET_IFNAME="${IFACE_NAME}"
 export NCCL_SOCKET_IFNAME="${IFACE_NAME}"
 export NCCL_IB_DISABLE="${NCCL_IB_DISABLE:-1}"
 export NCCL_CUMEM_HOST_ENABLE="${NCCL_CUMEM_HOST_ENABLE:-0}"
+# cuMem (CUMEM) allocation is broken in this containerized environment and
+# NCCL's P2P/CUMEM channels (used by alltoall-style send/recv traffic) hang.
+# Keep both the device and host switches off so NCCL falls back to NVLink P2P
+# and TCP.
+export NCCL_CUMEM_ENABLE="${NCCL_CUMEM_ENABLE:-0}"
 export NCCL_ASYNC_ERROR_HANDLING="${NCCL_ASYNC_ERROR_HANDLING:-1}"
 export NCCL_TIMEOUT="${NCCL_TIMEOUT:-1800}"
 export TORCH_DISTRIBUTED_TIMEOUT="${TORCH_DISTRIBUTED_TIMEOUT:-1800}"
