@@ -114,6 +114,13 @@ else
     # the string "0" would unexpectedly keep the check disabled.
     unset FLASHINFER_DISABLE_VERSION_CHECK
 fi
+# SGLang's DeepGEMM pre-compile walks M = 1..2*chunked_prefill_size for every
+# kernel group before serving; at --chunked-prefill-size 49152 that is 98,304 Ms
+# per group and holds startup in CUDA graph capture for ~35 minutes. Fast warmup
+# samples that list (~3.6k Ms) instead; an unsampled M is JIT-compiled on first
+# use, which is the warmup batch that runs before the measurements.
+export SGLANG_JIT_DEEPGEMM_FAST_WARMUP="${SGLANG_JIT_DEEPGEMM_FAST_WARMUP:-1}"
+
 # Keep FlashInfer JIT artifacts writable even when the launcher runs from a
 # service account with a read-only home-directory cache.
 export FLASHINFER_WORKSPACE_BASE="${FLASHINFER_WORKSPACE_BASE:-/tmp/sglang_flashinfer_workspace}"

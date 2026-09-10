@@ -16,9 +16,13 @@ Supported benchmark modes:
 from __future__ import annotations
 
 import csv
+import functools
 import json
+import logging
 import os
+import re
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -54,6 +58,17 @@ NUM_REPEATS = 3
 # Number of requests submitted to vLLM in one batch. Set to 1 for the
 # original single-stream measurement; 4 measures four concurrent streams.
 REQUEST_CONCURRENCY = 4
+
+# How many times a batch may be measured again after it triggered a kernel JIT
+# compilation. vLLM builds Triton/TileLang kernels on the first step that needs
+# a given shape, and a build inside a measured batch charges seconds to minutes
+# of compile time to that batch's TTFT/TPOT: those numbers describe the
+# compiler, not the model. Such a batch is discarded and run again, which is
+# clean because the kernel is cached after the discarded attempt. A batch that
+# is still compiling after this many retries is kept with
+# ``jit_contaminated`` set and left out of the aggregate. 0 detects and
+# excludes without re-running.
+JIT_RETRY_LIMIT = 3
 MAX_MODEL_LEN = 200000
 MAX_NUM_SEQS = 16
 GPU_MEMORY_UTILIZATION = 0.9
@@ -133,6 +148,8 @@ def validate_config() -> None:
         errors.append("OUTPUT_TOKENS, MAX_MODEL_LEN and MAX_NUM_SEQS must be positive")
     if NUM_WARMUPS < 0 or NUM_REPEATS <= 0:
         errors.append("NUM_WARMUPS must be >= 0 and NUM_REPEATS must be positive")
+    if JIT_RETRY_LIMIT < 0:
+        errors.append("JIT_RETRY_LIMIT must be >= 0")
     if REQUEST_CONCURRENCY <= 0 or REQUEST_CONCURRENCY > MAX_NUM_SEQS:
         errors.append("REQUEST_CONCURRENCY must be in [1, MAX_NUM_SEQS]")
     if not 0 < GPU_MEMORY_UTILIZATION <= 1:
@@ -282,6 +299,237 @@ def _run_request(
     }
 
 
+# =============================================================================
+# JIT compilation guard
+# =============================================================================
+# vLLM compiles kernels on the first step that needs a given shape. When that
+# happens inside a measured batch, the kernel build stalls the engine and the
+# batch's TTFT/TPOT report compile time instead of model latency. vLLM's
+# ``jit_monitor`` announces those events ("<backend> JIT compilation during
+# inference: <kernel>"), so the runner counts them, throws the affected batch
+# away and measures it again.
+#
+# Two details matter for the counting to be trustworthy:
+#   * The monitor logs through ``warning_once``, which suppresses a kernel that
+#     is later compiled again for another shape, so the log records alone can
+#     miss events. The counts come from the monitor's own funnel instead
+#     (``_handle_jit_event``, shared by the Triton/CuTeDSL/TileLang hooks), with
+#     the log handler kept as a fallback.
+#   * A compile happens on whichever rank executes that layer, and every other
+#     rank stalls behind it in the pipeline. Rank-local counts would therefore
+#     hide node-2 compiles from node-0 timings, so ranks sum their counts and
+#     only re-run a batch when all of them agree it was clean.
+
+JIT_EVENT_PATTERN = re.compile(r"JIT compilation during inference")
+
+
+class _JitCompileCounter:
+    """Collect the kernel JIT compilations reported while a batch runs."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._count = 0
+        self._kernels: list[str] = []
+
+    def record(self, kernel: str) -> None:
+        with self._lock:
+            self._count += 1
+            if kernel not in self._kernels:
+                self._kernels.append(kernel)
+
+    def take(self) -> tuple[int, list[str]]:
+        """Return the events collected so far and reset the counter."""
+        with self._lock:
+            count, kernels = self._count, self._kernels
+            self._count, self._kernels = 0, []
+        return count, kernels
+
+
+class _JitWarningHandler(logging.Handler):
+    """Count JIT warnings that reach the ``vllm`` logger.
+
+    Fallback used when the monitor's own funnel cannot be hooked; it cannot see
+    events that ``warning_once`` deduplicates, hence the ordering above.
+    """
+
+    def __init__(self, counter: _JitCompileCounter) -> None:
+        super().__init__(level=logging.WARNING)
+        self._counter = counter
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            message = record.getMessage()
+        except Exception:  # a broken record must never break the benchmark
+            return
+        if JIT_EVENT_PATTERN.search(message):
+            self._counter.record(_jit_event_label(message))
+
+
+def _jit_event_label(message: str) -> str:
+    """Turn a monitor warning into a short kernel label."""
+    tail = message.split("during inference:", 1)[-1].strip()
+    return tail.split(".", 1)[0].strip() or message
+
+
+def _jit_event_name(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
+    """Read ``fn_name`` out of a monitor call, whatever way it was passed."""
+    name = kwargs.get("fn_name")
+    if name is None and len(args) >= 3:
+        name = args[2]
+    return str(name or "unknown")
+
+
+def install_jit_guard(counter: _JitCompileCounter, announce: bool = False) -> list[str]:
+    """Route every JIT signal vLLM exposes into ``counter``.
+
+    Returns the installed signal names so the report can show whether the guard
+    was active.
+    """
+    installed: list[str] = []
+    hooked = False
+    try:
+        from vllm.utils import jit_monitor
+
+        original = jit_monitor._handle_jit_event
+
+        @functools.wraps(original)
+        def _counted(*args: Any, **kwargs: Any) -> Any:
+            counter.record(_jit_event_name(args, kwargs))
+            return original(*args, **kwargs)
+
+        jit_monitor._handle_jit_event = _counted
+        installed.append("vllm.utils.jit_monitor")
+        hooked = True
+    except Exception as exc:  # pragma: no cover - depends on the vLLM build
+        if announce:
+            print(
+                f"Warning: cannot hook vLLM's JIT monitor ({exc}); "
+                "relying on its log records instead.",
+                flush=True,
+            )
+
+    # Only one signal counts a given compilation: every monitor warning is
+    # emitted from the funnel, so adding the handler on top would double the
+    # counters the report exposes.
+    if not hooked:
+        try:
+            logging.getLogger("vllm").addHandler(_JitWarningHandler(counter))
+            installed.append("vllm logger")
+        except Exception as exc:  # pragma: no cover - logging itself failing
+            if announce:
+                print(f"Warning: cannot attach the JIT log handler ({exc}).", flush=True)
+    return installed
+
+
+def count_all_rank_jit_events(torch: Any, dist: Any, local_count: int) -> int:
+    """Sum a batch's JIT events over all ranks.
+
+    Every rank has to reach the same verdict, because they re-run the batch
+    together or not at all.
+    """
+    if dist is None or not dist.is_initialized():
+        return local_count
+    device = torch.device("cuda", torch.cuda.current_device())
+    tensor = torch.tensor([local_count], dtype=torch.int64, device=device)
+    dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+    return int(tensor.item())
+
+
+def _benchmark_request_id(task: str, sample: int, repeat: int, attempt: int) -> str:
+    """Build the request ID for one attempt of a measured batch.
+
+    Attempt 0 keeps the original ID; later attempts add a suffix so a re-run
+    never reuses the ID of the request it replaces.
+    """
+    suffix = "" if attempt == 0 else f"-retry{attempt}"
+    return f"benchmark-{task}-{sample}-{repeat}{suffix}"
+
+
+def _run_batch_until_jit_free(
+    llm: Any,
+    request_batch: list[dict[str, Any]],
+    repeat: int,
+    torch: Any,
+    dist: Any,
+    counter: _JitCompileCounter,
+    batch_id: str,
+    announce: bool,
+    make_params: Any,
+) -> tuple[dict[str, tuple[Any, dict[str, float | int]]], dict[str, float | int], int, bool, list[str]]:
+    """Run one measured batch, re-running it while it compiles kernels.
+
+    ``make_params`` is called once per request and attempt, so every request
+    gets its own sampling parameters exactly as an unguarded run would.
+    Returns the results and timing of the accepted attempt plus the number of
+    discarded attempts, whether the last attempt still compiled something, and
+    the kernels seen. Request IDs carry the attempt number so a re-run never
+    reuses the IDs of the discarded attempt.
+    """
+    attempts = 0
+    kernels_seen: list[str] = []
+    while True:
+        batch = [
+            (
+                _benchmark_request_id(request["task"], request["sample"], repeat, attempts),
+                request["prompt"],
+                make_params(),
+            )
+            for request in request_batch
+        ]
+        counter.take()
+        batch_results, batch_timing = _run_batch(llm, batch, torch)
+        local_count, local_kernels = counter.take()
+        compiled_here = count_all_rank_jit_events(torch, dist, local_count) > 0
+        kernels_seen.extend(kernel for kernel in local_kernels if kernel not in kernels_seen)
+        if not compiled_here or attempts >= JIT_RETRY_LIMIT:
+            return batch_results, batch_timing, attempts, compiled_here, kernels_seen
+        attempts += 1
+        if announce:
+            named = ", ".join(local_kernels) if local_kernels else "a kernel"
+            print(
+                f"Warning: {batch_id} compiled {named} mid-batch, so its timings "
+                f"measure the compiler; discarding it and measuring again "
+                f"({attempts}/{JIT_RETRY_LIMIT}).",
+                flush=True,
+            )
+
+
+def _median(values: list[float]) -> float:
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2.0
+
+
+def _slow_steps(
+    step_durations: list[float],
+    first_token_step: int | None,
+    top: int = 3,
+) -> list[dict[str, float | int | str]]:
+    """The longest engine steps of a batch, labelled by phase.
+
+    TTFT spread between otherwise identical batches is either one stalled step
+    (a compile or a transport hiccup) or every step being slower (compute), and
+    this list tells the two apart.
+    """
+    ranked = sorted(
+        range(len(step_durations)), key=lambda index: step_durations[index], reverse=True
+    )[:top]
+    return [
+        {
+            "step": index,
+            "ms": round(step_durations[index] * 1000, 1),
+            "phase": (
+                "prefill"
+                if first_token_step is None or index <= first_token_step
+                else "decode"
+            ),
+        }
+        for index in sorted(ranked)
+    ]
+
+
 def _run_batch(
     llm: Any,
     batch: list[tuple[str, str, Any]],
@@ -301,9 +549,13 @@ def _run_batch(
         }
         for request_id, _, _ in batch
     }
+    step_durations: list[float] = []
+    first_token_step: int | None = None
     while llm.llm_engine.has_unfinished_requests():
+        step_started_at = time.perf_counter()
         step_outputs = llm.llm_engine.step()
         step_finished_at = time.perf_counter()
+        step_durations.append(step_finished_at - step_started_at)
         for output in step_outputs:
             request_id = str(getattr(output, "request_id", ""))
             if request_id not in state:
@@ -316,6 +568,8 @@ def _run_batch(
             item["generated_tokens"] += token_count
             if token_count and item["first_token_at"] is None:
                 item["first_token_at"] = step_finished_at
+                if first_token_step is None:
+                    first_token_step = len(step_durations) - 1
             if getattr(output, "finished", False):
                 item["finished_output"] = output
                 item["finished_at"] = step_finished_at
@@ -355,6 +609,12 @@ def _run_batch(
             else 0.0
         ),
         "batch_concurrency": len(batch),
+        "batch_steps": len(step_durations),
+        "batch_step_p50_ms": (
+            _median(step_durations) * 1000 if step_durations else 0.0
+        ),
+        "batch_step_max_ms": max(step_durations) * 1000 if step_durations else 0.0,
+        "batch_slow_steps": _slow_steps(step_durations, first_token_step),
     }
 
 
@@ -436,7 +696,19 @@ def _report_aggregate(
     request_rows: list[dict[str, Any]],
     batch_rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, float | int]:
-    """Summarize completed requests, including end-to-end decode throughput."""
+    """Summarize completed requests, including end-to-end decode throughput.
+
+    A batch that kept compiling kernels after ``JIT_RETRY_LIMIT`` attempts was
+    measuring the compiler rather than the model, so it is counted in
+    ``contaminated_*`` and left out of every average and throughput below. It
+    stays visible in ``results``, flagged with ``jit_contaminated``.
+    """
+    all_batch_rows = batch_rows or []
+    contaminated_requests = sum(1 for row in request_rows if row.get("jit_contaminated"))
+    contaminated_batches = sum(1 for row in all_batch_rows if row.get("jit_contaminated"))
+    request_rows = [row for row in request_rows if not row.get("jit_contaminated")]
+    batch_rows = [row for row in all_batch_rows if not row.get("jit_contaminated")]
+
     if not request_rows:
         return {
             "completed_experiments": 0,
@@ -452,6 +724,8 @@ def _report_aggregate(
             "aggregate_decode_tps": 0.0,
             "request_sum_decode_tps": 0.0,
             "completed_batches": 0,
+            "contaminated_requests": contaminated_requests,
+            "contaminated_batches": contaminated_batches,
         }
 
     count = len(request_rows)
@@ -461,7 +735,6 @@ def _report_aggregate(
 
     total_decode_ms = total("decode_ms")
     total_decode_tokens = int(total("decode_tokens"))
-    batch_rows = batch_rows or []
     batch_decode_tokens = sum(int(row.get("decode_tokens", 0) or 0) for row in batch_rows)
     batch_decode_ms = sum(float(row.get("decode_ms", 0.0) or 0.0) for row in batch_rows)
     return {
@@ -495,6 +768,8 @@ def _report_aggregate(
             if total_decode_ms > 0
             else 0.0
         ),
+        "contaminated_requests": contaminated_requests,
+        "contaminated_batches": contaminated_batches,
     }
 
 
@@ -504,6 +779,7 @@ def _write_results(
     output_dir: Path,
     status: str,
     batch_rows: list[dict[str, Any]] | None = None,
+    jit_summary: dict[str, Any] | None = None,
 ) -> None:
     metadata = {
         "model": MODEL_PATH,
@@ -521,6 +797,8 @@ def _write_results(
         "status": status,
         "completed_experiments": len(request_rows),
     }
+    if jit_summary is not None:
+        metadata["jit"] = jit_summary
     summary_payload = {"metadata": metadata, "results": request_rows}
     (output_dir / "summary.json").write_text(
         json.dumps(summary_payload, indent=2, ensure_ascii=False),
@@ -571,6 +849,18 @@ def main() -> int:
     from vllm import LLM, SamplingParams
     from vllm.sampling_params import RequestOutputKind
 
+    # Installed before the engine is built so no compilation after warmup can
+    # go unnoticed, whichever backend reports it.
+    jit_counter = _JitCompileCounter()
+    jit_summary: dict[str, Any] = {
+        "retry_limit": JIT_RETRY_LIMIT,
+        "signals": install_jit_guard(jit_counter, announce=bool(rank["is_leader"])),
+        "startup_events": 0,
+        "warmup_events": 0,
+        "retried_batches": [],
+        "contaminated_batches": [],
+    }
+
     model_dir = Path(MODEL_PATH)
     if not model_dir.is_dir():
         raise FileNotFoundError(f"Model directory does not exist: {model_dir}")
@@ -610,6 +900,10 @@ def main() -> int:
             f"PP={PP_SIZE} TP={TP_SIZE_PER_STAGE} EP={ENABLE_EXPERT_PARALLEL}"
         )
     llm = LLM(**kwargs)
+    # Kernel builds during engine init, profiling and graph capture are
+    # expected and happen before any measurement; only later ones matter.
+    startup_events, _ = jit_counter.take()
+    jit_summary["startup_events"] = startup_events
     if dist.is_initialized():
         dist.barrier()
 
@@ -646,6 +940,18 @@ def main() -> int:
                 )
             _run_batch(llm, batch, torch)
 
+    # Warmup exists to compile the shapes the measured batches use, so builds
+    # here are expected; they are counted to show what the guard had to absorb.
+    warmup_events = count_all_rank_jit_events(torch, dist, jit_counter.take()[0])
+    jit_summary["warmup_events"] = warmup_events
+    if bool(rank["is_leader"]):
+        print(
+            f"Warmup complete; {warmup_events} kernel JIT compilation(s) seen "
+            "across all ranks. Measured batches that still compile a kernel "
+            f"are re-run up to {JIT_RETRY_LIMIT} time(s).",
+            flush=True,
+        )
+
     rows: list[dict[str, Any]] = []
     batch_rows: list[dict[str, Any]] = []
     for batch_start in range(0, len(requests), REQUEST_CONCURRENCY):
@@ -658,17 +964,38 @@ def main() -> int:
                     f"({repeat + 1}/{NUM_REPEATS})",
                     flush=True,
                 )
-            batch = [
-                (
-                    f"benchmark-{request['task']}-{request['sample']}-{repeat}",
-                    request["prompt"],
-                    _sampling_params(SamplingParams, RequestOutputKind),
-                )
-                for request in request_batch
-            ]
-            batch_results, batch_timing = _run_batch(llm, batch, torch)
+            (
+                batch_results,
+                batch_timing,
+                attempts,
+                jit_contaminated,
+                jit_kernels,
+            ) = _run_batch_until_jit_free(
+                llm,
+                request_batch,
+                repeat,
+                torch,
+                dist,
+                jit_counter,
+                batch_id,
+                announce=bool(rank["is_leader"]),
+                make_params=functools.partial(
+                    _sampling_params, SamplingParams, RequestOutputKind
+                ),
+            )
             if not bool(rank["is_leader"]):
                 continue
+            if attempts:
+                jit_summary["retried_batches"].append(batch_id)
+            if jit_contaminated:
+                jit_summary["contaminated_batches"].append(batch_id)
+                print(
+                    f"Warning: {batch_id} compiled "
+                    f"{', '.join(jit_kernels) or 'a kernel'} during all "
+                    f"{attempts} retries; its numbers are reported but excluded "
+                    "from the aggregate.",
+                    flush=True,
+                )
             batch_row = {
                 "batch_id": batch_id,
                 "batch_size": len(request_batch),
@@ -676,10 +1003,30 @@ def main() -> int:
                 "decode_ms": float(batch_timing["batch_decode_s"]) * 1000,
                 "decode_tps": float(batch_timing["batch_decode_tps"]),
                 "elapsed_ms": float(batch_timing["batch_elapsed_s"]) * 1000,
+                "jit_retries": attempts,
+                "jit_contaminated": jit_contaminated,
+                "steps": int(batch_timing["batch_steps"]),
+                "step_p50_ms": float(batch_timing["batch_step_p50_ms"]),
+                "step_max_ms": float(batch_timing["batch_step_max_ms"]),
+                "slow_steps": batch_timing["batch_slow_steps"],
             }
             batch_rows.append(batch_row)
+            # A step that takes much longer than the batch median is a stall the
+            # engine cannot attribute to the model: a compile, a transport
+            # hiccup, or a slow rank. Surface it while the run is still going.
+            if float(batch_timing["batch_step_max_ms"]) > 1000:
+                slowest = batch_timing["batch_slow_steps"][0]
+                print(
+                    f"Warning: {batch_id} step {slowest['step']} took "
+                    f"{slowest['ms']} ms ({slowest['phase']}); median step "
+                    f"{float(batch_timing['batch_step_p50_ms']):.0f} ms over "
+                    f"{int(batch_timing['batch_steps'])} steps.",
+                    flush=True,
+                )
             for request in request_batch:
-                request_id = f"benchmark-{request['task']}-{request['sample']}-{repeat}"
+                request_id = _benchmark_request_id(
+                    request["task"], request["sample"], repeat, attempts
+                )
                 output, timing = batch_results[request_id]
                 metrics = _request_metrics(output, timing)
                 row = {
@@ -689,17 +1036,33 @@ def main() -> int:
                     "batch_id": batch_id,
                     "batch_concurrency": len(request_batch),
                     "batch_decode_tps": batch_row["decode_tps"],
+                    "jit_retries": attempts,
+                    "jit_contaminated": jit_contaminated,
                     **metrics,
                     "gpu_memory_mb": _gpu_memory(torch),
                 }
                 rows.append(row)
                 print(json.dumps(row, ensure_ascii=False), flush=True)
             assert output_dir is not None
-            _write_results(rows, rank, output_dir, status="in_progress", batch_rows=batch_rows)
+            _write_results(
+                rows,
+                rank,
+                output_dir,
+                status="in_progress",
+                batch_rows=batch_rows,
+                jit_summary=jit_summary,
+            )
 
     if bool(rank["is_leader"]):
         assert output_dir is not None
-        _write_results(rows, rank, output_dir, status="completed", batch_rows=batch_rows)
+        _write_results(
+            rows,
+            rank,
+            output_dir,
+            status="completed",
+            batch_rows=batch_rows,
+            jit_summary=jit_summary,
+        )
     return 0
 
 

@@ -51,7 +51,22 @@ MOE_RUNNER_BACKEND = "flashinfer_mxfp4"
 # Keep the PP=2 benchmark target-only. DSpark speculative decoding requires
 # pp_size == 1 and is configured in ``sglang_benchmark speculative.py``.
 SPECULATIVE_ALGORITHM: str | None = None
-CHUNKED_PREFILL_SIZE = 8192
+# SGLang admits at most this many new prefill tokens per scheduling iteration and
+# splits longer prompts into chunks across iterations. Keep it above the token
+# count of one whole measured batch (REQUEST_CONCURRENCY long-context prompts,
+# about 47k for the LongBench mix below) so a batch that is already queued is
+# prefilled in a single iteration. At the 8192 default the engine serialises a
+# concurrent burst chunk by chunk, which turns a concurrency measurement into a
+# queueing measurement.
+CHUNKED_PREFILL_SIZE = 49152
+# Before serving, SGLang pre-compiles its DeepGEMM JIT cache by walking
+# M = 1 .. 2 * chunked_prefill_size for every kernel group it meets; at the size
+# above that is 98,304 Ms per group (5 groups for this model) and pins server
+# startup in CUDA graph capture for ~35 minutes. Fast warmup samples that list
+# instead (~3.6k Ms, capped at 32k) and leaves an unsampled M to be JIT-compiled
+# on its first real use -- the warmup batch that precedes the measured passes
+# absorbs it, so the measured batches still see compiled kernels.
+DEEPGEMM_FAST_WARMUP = True
 DISABLE_FLASHINFER_AUTOTUNE = True
 SWA_FULL_TOKENS_RATIO = 0.1
 MEM_FRACTION_STATIC = 0.85
@@ -74,6 +89,20 @@ NUM_REPEATS = 3
 REQUEST_CONCURRENCY = 4
 REQUEST_TIMEOUT_SECONDS = 3600
 RESULTS_DIR = "results"
+
+# Every measured repeat runs two passes over the same batch:
+#   * "cold_prefill" flushes the radix cache first, so ttft_ms and prefill_tps
+#     describe a real prefilling request instead of a cache read;
+#   * "warm_decode" reruns the very same prompts, which the cold pass left in the
+#     radix cache, so no stream pays a long prefill inside the measurement and
+#     steady_decode_tps captures the streams decoding together.
+# Set this to False to run the cold pass only, e.g. for a prefill latency run.
+MEASURE_WARM_DECODE_PASS = True
+COLD_PHASE = "cold_prefill"
+WARM_PHASE = "warm_decode"
+# Report a batch whose streams started decoding this far apart: SGLang admitted
+# it in more than one prefill iteration, so the streams did not run concurrently.
+PREFILL_SPREAD_WARN_MS = 1000.0
 
 
 def build_custom_prompt(index: int) -> str:
@@ -224,6 +253,29 @@ def wait_for_server() -> str:
     raise RuntimeError(f"SGLang endpoint did not become ready: {last_error}")
 
 
+def flush_radix_cache() -> None:
+    """Drop every cached prefix so the next batch measures a cold prefill.
+
+    SGLang performs the flush only while it is idle and answers HTTP 400 when
+    requests are queued or running. That must fail the run: carrying on would
+    silently report cache hits as prefill latency.
+    """
+    url = f"{_endpoint()}/flush_cache"
+    request = urllib.request.Request(url, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+            body = response.read().decode("utf-8", errors="replace").strip()
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace").strip() or str(exc.reason)
+        raise RuntimeError(
+            f"POST {url} failed with HTTP {exc.code}: {detail} "
+            "The radix cache must be empty before a measured batch, otherwise ttft_ms reports "
+            "cache hits instead of prefill. Retry when the endpoint is idle, or run SGLang with "
+            "--disable-radix-cache and set FLUSH_RADIX_CACHE_BEFORE_REPEAT = False."
+        ) from exc
+    print(f"Radix cache flushed ({body.splitlines()[0] if body else 'ok'})", flush=True)
+
+
 def _worker_alive(pid_text: str) -> bool:
     """Return false for a missing or already-reaped worker process."""
     try:
@@ -262,6 +314,9 @@ def _stream_request(
     )
     first_token_at: float | None = None
     last_token_at: float | None = None
+    # Arrival time of every streamed token, relative to this request's start, so
+    # the batch can tell pure decode time apart from another stream's prefill.
+    token_offsets: list[float] = []
     output_parts: list[str] = []
     usage: dict[str, Any] | None = None
     with urllib.request.urlopen(http_request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
@@ -281,6 +336,7 @@ def _stream_request(
                     now = time.perf_counter()
                     first_token_at = first_token_at or now
                     last_token_at = now
+                    token_offsets.append(now - started)
                     output_parts.append(str(text))
     finished = time.perf_counter()
     output_text = "".join(output_parts)
@@ -314,8 +370,64 @@ def _stream_request(
         "timing_source": "http_stream_wall_clock",
         "prompt_token_source": prompt_source,
         "output_token_source": token_source,
+        "_started_at": started,
         "_decode_first_at": first_token_at,
         "_decode_last_at": last_token_at,
+        "_token_offsets": token_offsets,
+    }
+
+
+def _finalize_batch_timing(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Turn per-stream token arrival times into batch decode metrics.
+
+    ``decode_*`` spans the whole batch, from the first token of the earliest
+    stream to the last token of the slowest one. Whenever SGLang admits the
+    batch in more than one prefill iteration, that window also contains the
+    time the later streams spent queueing and prefilling, which is why
+    ``prefill_spread_ms`` and ``admission_lag_ms`` are reported next to it.
+
+    ``steady_*`` covers only the window in which every stream has produced its
+    first token and none has finished, so no stream's prefill overlaps it. That
+    is the window in which the streams really decode concurrently, and the only
+    one that makes per-stream rates comparable within a batch.
+    """
+    starts = [float(row.pop("_started_at")) for row in rows]
+    firsts = [float(row.pop("_decode_first_at")) for row in rows]
+    lasts = [float(row.pop("_decode_last_at")) for row in rows]
+    offsets = [row.pop("_token_offsets") for row in rows]
+    batch_first, batch_last = min(firsts), max(lasts)
+    decode_s = max(0.0, batch_last - batch_first)
+    # Every stream has started decoding, and the first one has not finished yet.
+    steady_start, steady_end = max(firsts), min(lasts)
+    steady_s = max(0.0, steady_end - steady_start)
+    decode_tokens = sum(int(row["decode_tokens"]) for row in rows)
+    steady_tokens = 0.0
+    for index, row in enumerate(rows):
+        # The first streamed token ends prefill; the remaining ones are decode
+        # tokens, matching the decode_tokens = output_tokens - 1 convention.
+        decode_offsets = offsets[index][1:]
+        weight = int(row["decode_tokens"]) / len(decode_offsets) if decode_offsets else 0.0
+        in_window = sum(
+            1 for offset in decode_offsets
+            if steady_s > 0 and steady_start <= starts[index] + offset <= steady_end
+        )
+        row_steady_tokens = weight * in_window
+        steady_tokens += row_steady_tokens
+        row["admission_lag_ms"] = (firsts[index] - batch_first) * 1000
+        row["steady_window_ms"] = steady_s * 1000
+        row["steady_decode_tokens"] = row_steady_tokens
+        row["steady_decode_tps"] = row_steady_tokens / steady_s if steady_s > 0 else 0.0
+        row["steady_tpot_ms"] = steady_s * 1000 / row_steady_tokens if row_steady_tokens else 0.0
+    return {
+        "batch_size": len(rows),
+        "decode_tokens": decode_tokens,
+        "decode_ms": decode_s * 1000,
+        "decode_tps": decode_tokens / decode_s if decode_s else 0.0,
+        "prefill_spread_ms": (max(firsts) - min(firsts)) * 1000,
+        "steady_window_ms": steady_s * 1000,
+        "steady_decode_tokens": steady_tokens,
+        "steady_decode_tps": steady_tokens / steady_s if steady_s > 0 else 0.0,
+        "elapsed_ms": max(float(row["elapsed_ms"]) for row in rows),
     }
 
 
@@ -327,39 +439,114 @@ def _run_batch(
         futures = [executor.submit(_stream_request, request, model_id, token_counter, barrier)
                    for request in requests]
         rows = [future.result() for future in as_completed(futures)]
-    first = min(float(row.pop("_decode_first_at")) for row in rows)
-    last = max(float(row.pop("_decode_last_at")) for row in rows)
-    decode_s = max(0.0, last - first)
-    decode_tokens = sum(int(row["decode_tokens"]) for row in rows)
-    return rows, {
-        "batch_size": len(rows),
-        "decode_tokens": decode_tokens,
-        "decode_ms": decode_s * 1000,
-        "decode_tps": decode_tokens / decode_s if decode_s else 0.0,
-        "elapsed_ms": max(float(row["elapsed_ms"]) for row in rows),
-    }
+    return rows, _finalize_batch_timing(rows)
 
 
 def _aggregate(rows: list[dict[str, Any]], batches: list[dict[str, Any]]) -> dict[str, float | int]:
-    def total(name: str) -> float:
-        return sum(float(row.get(name, 0.0) or 0.0) for row in rows)
-    total_batch_decode_ms = sum(float(batch["decode_ms"]) for batch in batches)
-    total_batch_decode_tokens = sum(int(batch["decode_tokens"]) for batch in batches)
-    count = len(rows)
+    """Aggregate each metric over the pass that can measure it.
+
+    Latency and prefill figures come from the cold (cache-free) pass; decode and
+    throughput figures come from the warm pass, in which every stream is already
+    prefilled. Papers over a single-pass report by falling back to all rows.
+    """
+    def mean(name: str, subset: list[dict[str, Any]]) -> float:
+        if not subset:
+            return 0.0
+        return sum(float(row.get(name, 0.0) or 0.0) for row in subset) / len(subset)
+
+    def total(name: str, subset: list[dict[str, Any]]) -> float:
+        return sum(float(row.get(name, 0.0) or 0.0) for row in subset)
+
+    cold_rows = [row for row in rows if row.get("phase") == COLD_PHASE] or rows
+    decode_rows = [row for row in rows if row.get("phase") == WARM_PHASE] or rows
+    cold_batches = [batch for batch in batches if batch.get("phase") == COLD_PHASE] or batches
+    decode_batches = [batch for batch in batches if batch.get("phase") == WARM_PHASE] or batches
+    total_batch_decode_ms = sum(float(batch["decode_ms"]) for batch in decode_batches)
+    total_batch_decode_tokens = sum(int(batch["decode_tokens"]) for batch in decode_batches)
+    # Only rows the steady window actually covers carry a comparable rate.
+    steady_rows = [
+        row for row in decode_rows if float(row.get("steady_decode_tokens", 0.0) or 0.0) > 0
+    ]
+    steady_batches = [
+        batch for batch in decode_batches if float(batch.get("steady_window_ms", 0.0) or 0.0) > 0
+    ]
+    total_steady_window_ms = sum(float(batch["steady_window_ms"]) for batch in steady_batches)
+    total_steady_decode_tokens = sum(float(batch["steady_decode_tokens"]) for batch in steady_batches)
     return {
-        "completed_experiments": count,
-        "completed_batches": len(batches),
-        "total_prompt_tokens": int(total("prompt_tokens")),
-        "total_output_tokens": int(total("output_tokens")),
-        "total_decode_tokens": int(total("decode_tokens")),
-        "mean_ttft_ms": total("ttft_ms") / count if count else 0.0,
-        "mean_tpot_ms": total("tpot_ms") / count if count else 0.0,
-        "mean_decode_tps": total("decode_tps") / count if count else 0.0,
+        "completed_experiments": len(cold_rows),
+        "completed_batches": len(cold_batches),
+        "completed_passes": len(batches),
+        "total_prompt_tokens": int(total("prompt_tokens", cold_rows)),
+        "total_output_tokens": int(total("output_tokens", decode_rows)),
+        "total_decode_tokens": int(total("decode_tokens", decode_rows)),
+        "mean_ttft_ms": mean("ttft_ms", cold_rows),
+        "mean_prefill_tps": mean("prefill_tps", cold_rows),
+        "mean_tpot_ms": mean("tpot_ms", decode_rows),
+        "mean_decode_tps": mean("decode_tps", decode_rows),
         "aggregate_decode_tps": (
             total_batch_decode_tokens / (total_batch_decode_ms / 1000.0)
             if total_batch_decode_ms else 0.0
         ),
+        "batches_with_steady_window": len(steady_batches),
+        "mean_steady_decode_tps": mean("steady_decode_tps", steady_rows),
+        "mean_steady_tpot_ms": mean("steady_tpot_ms", steady_rows),
+        "aggregate_steady_decode_tps": (
+            total_steady_decode_tokens / (total_steady_window_ms / 1000.0)
+            if total_steady_window_ms else 0.0
+        ),
     }
+
+
+def _warn_if_prefill_budget_too_small(prompt_tokens: int, label: str) -> None:
+    """Flag a batch the engine cannot admit in one prefill iteration."""
+    if prompt_tokens <= CHUNKED_PREFILL_SIZE:
+        return
+    print(
+        f"Warning: {label} holds {prompt_tokens} prompt tokens but SGLang was started with "
+        f"CHUNKED_PREFILL_SIZE={CHUNKED_PREFILL_SIZE}; it admits at most that many new prefill "
+        "tokens per iteration, so the streams are prefilled one chunk at a time instead of "
+        "concurrently. Raise CHUNKED_PREFILL_SIZE above the batch size for a real concurrency "
+        "measurement.",
+        flush=True,
+    )
+
+
+def _measurement_passes() -> tuple[str, ...]:
+    """Return the pass order for one repeat: cold first, warm decode second."""
+    if MEASURE_WARM_DECODE_PASS:
+        return (COLD_PHASE, WARM_PHASE)
+    return (COLD_PHASE,)
+
+
+def _report_batch_diagnostics(
+    batch_id: str, phase: str, rows: list[dict[str, Any]], metrics: dict[str, Any]
+) -> None:
+    """Explain batches whose streams did not decode concurrently."""
+    spread_ms = float(metrics["prefill_spread_ms"])
+    if spread_ms > PREFILL_SPREAD_WARN_MS:
+        latest = max(rows, key=lambda row: float(row["admission_lag_ms"]))
+        print(
+            f"Warning: {batch_id} streams started decoding {spread_ms:.0f} ms apart; SGLang admitted "
+            "them in more than one prefill iteration, so their ttft_ms and decode_ms include "
+            f"queueing for the other streams' prefill (latest: {latest['task']} s{latest['sample']}). "
+            "Read admission_lag_ms and steady_decode_tps per row; they exclude that wait.",
+            flush=True,
+        )
+    if float(metrics["steady_window_ms"]) <= 0:
+        if phase == WARM_PHASE:
+            print(
+                f"Warning: {batch_id} never had all streams decoding at once, so it has no steady "
+                "decode window and steady_decode_tps stays 0. Raise OUTPUT_TOKENS so the streams "
+                "overlap, or raise CHUNKED_PREFILL_SIZE so the batch is prefilled in one iteration.",
+                flush=True,
+            )
+        else:
+            print(
+                f"Warning: {batch_id} has no steady decode window: the cold prefill of one stream "
+                "runs inside another stream's generation. Its ttft_ms is the number to use; the "
+                f"decode figures come from the {WARM_PHASE} pass.",
+                flush=True,
+            )
 
 
 def _write_report(
@@ -381,6 +568,21 @@ def _write_report(
         "speculative_algorithm": SPECULATIVE_ALGORITHM,
         "request_concurrency": REQUEST_CONCURRENCY,
         "output_tokens": OUTPUT_TOKENS,
+        "chunked_prefill_size": CHUNKED_PREFILL_SIZE,
+        # Which DeepGEMM warmup list the server walked; "1" is the sampled one.
+        "jit_deepgemm_fast_warmup": os.environ.get(
+            "SGLANG_JIT_DEEPGEMM_FAST_WARMUP", "1" if DEEPGEMM_FAST_WARMUP else "0"
+        ),
+        "measurement_passes": list(_measurement_passes()),
+        # A "cold_prefill" row runs against an empty radix cache; a "warm_decode"
+        # row reuses the prefix the cold pass left behind.
+        "aggregate_sources": {
+            "ttft_ms": COLD_PHASE,
+            "prefill_tps": COLD_PHASE,
+            "tpot_ms": WARM_PHASE if MEASURE_WARM_DECODE_PASS else COLD_PHASE,
+            "decode_tps": WARM_PHASE if MEASURE_WARM_DECODE_PASS else COLD_PHASE,
+            "steady_decode_tps": WARM_PHASE if MEASURE_WARM_DECODE_PASS else COLD_PHASE,
+        },
         "status": status,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
     }
@@ -415,24 +617,41 @@ def run_benchmark() -> int:
             for index in range(0, len(requests), REQUEST_CONCURRENCY):
                 batch = requests[index : index + REQUEST_CONCURRENCY]
                 print(f"Warmup {warmup + 1}/{NUM_WARMUPS}, batch_size={len(batch)}", flush=True)
-                _run_batch(batch, model_id, token_counter)
+                warmup_rows, _ = _run_batch(batch, model_id, token_counter)
+                _warn_if_prefill_budget_too_small(
+                    sum(int(row["prompt_tokens"]) for row in warmup_rows), "warmup batch"
+                )
 
         for index in range(0, len(requests), REQUEST_CONCURRENCY):
             request_batch = requests[index : index + REQUEST_CONCURRENCY]
             for repeat in range(NUM_REPEATS):
                 batch_id = f"batch-{index // REQUEST_CONCURRENCY}-repeat-{repeat + 1}"
-                print(f"Running {batch_id}, streams={len(request_batch)}", flush=True)
-                batch_rows, batch_metrics = _run_batch(request_batch, model_id, token_counter)
-                batch_metrics["batch_id"] = batch_id
-                batches.append(batch_metrics)
-                for row in batch_rows:
-                    row["repeat"] = repeat + 1
-                    row["batch_id"] = batch_id
-                    row["batch_concurrency"] = len(request_batch)
-                    row["batch_decode_tps"] = batch_metrics["decode_tps"]
-                    print(json.dumps(row, ensure_ascii=False), flush=True)
-                rows.extend(batch_rows)
-                _write_report(rows, batches, "in_progress")
+                for phase in _measurement_passes():
+                    # The cold pass must start from an empty cache: the warmup and
+                    # every earlier pass filled it with these very prompts.
+                    if phase == COLD_PHASE:
+                        print(f"Flushing radix cache before {batch_id} ({phase})", flush=True)
+                        flush_radix_cache()
+                    label = f"{batch_id} ({phase})"
+                    print(f"Running {label}, streams={len(request_batch)}", flush=True)
+                    batch_rows, batch_metrics = _run_batch(request_batch, model_id, token_counter)
+                    batch_metrics["batch_id"] = batch_id
+                    batch_metrics["phase"] = phase
+                    batches.append(batch_metrics)
+                    _warn_if_prefill_budget_too_small(
+                        sum(int(row["prompt_tokens"]) for row in batch_rows), label
+                    )
+                    _report_batch_diagnostics(label, phase, batch_rows, batch_metrics)
+                    for row in batch_rows:
+                        row["phase"] = phase
+                        row["repeat"] = repeat + 1
+                        row["batch_id"] = batch_id
+                        row["batch_concurrency"] = len(request_batch)
+                        row["batch_decode_tps"] = batch_metrics["decode_tps"]
+                        row["batch_steady_decode_tps"] = batch_metrics["steady_decode_tps"]
+                        print(json.dumps(row, ensure_ascii=False), flush=True)
+                    rows.extend(batch_rows)
+                    _write_report(rows, batches, "in_progress")
     except Exception as exc:
         _write_report(rows, batches, "failed", str(exc))
         raise
@@ -568,7 +787,16 @@ def validate_serve(node_rank: int) -> int:
     return 0
 
 
+def _apply_server_env() -> None:
+    """Export the SGLang environment this configuration expects the server to run
+    with. An explicit value in the environment always wins."""
+    if DEEPGEMM_FAST_WARMUP and "SGLANG_JIT_DEEPGEMM_FAST_WARMUP" not in os.environ:
+        os.environ["SGLANG_JIT_DEEPGEMM_FAST_WARMUP"] = "1"
+        print("SGLANG_JIT_DEEPGEMM_FAST_WARMUP=1 (sampled DeepGEMM warmup list)", flush=True)
+
+
 def serve(node_rank: int) -> int:
+    _apply_server_env()
     _validate_model_compatibility()
     args = _build_serve_args(node_rank)
     print("Starting: " + " ".join(args), flush=True)
